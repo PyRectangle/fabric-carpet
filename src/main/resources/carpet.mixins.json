@@ -9,10 +9,12 @@
     "FillCommandMixin",
     "CloneCommandMixin",
     "SetBlockCommandMixin",
+    "ForceLoadCommand_forceLoadLimitMixin",
     "World_fillUpdatesMixin",
     "WorldChunk_fillUpdatesMixin",
     "StructureBlockBlockEntity_fillUpdatesMixin",
     "Structure_fillUpdatesMixin",
+    "ServerPlayNetworkHandler_interactionUpdatesMixin",
 
     "ServerMetadata_motdMixin",
 
@@ -89,6 +91,7 @@
 
     "PortalForcer_portalCachingMixin",
     "PortalBlock_portalCachingMixin",
+    "PortalForcerTicketInfo_portalCachingMixin",
 
     "Entity_portalSuffocationMixin",
     "PortalForcer_portalSuffocationMixin",
@@ -100,6 +103,7 @@
     "HopperBlockEntityMixin",
     "ContainerMixin",
     "ClientConnectionMixin",
+    "CauldronBlock_stackableSBoxesMixin",
     "ItemEntityMixin",
     "TntBlockMixin",
     "ExplosionMixin",
@@ -123,14 +127,30 @@
     "PickaxeItem_missingToolsMixin",
     "ShearsItem_missingToolsMixin",
 
+    "ItemDispenserBehaviour_extremeBehavioursMixin",
+    "ItemScatterer_extremeMixin",
+    "FishingBobberEntity_extremeMixin",
+    "SkeletonHorseTrapTriggerGoal_extremeMixin",
+    "FireworkEntity_extremeMixin",
+    "BlazeEntity_extremeMixin",
+    "BlazeEntityShootFireballGoal_extremeMixin",
+    "MobEntity_extremeMixin",
+    "ExplosiveProjectileEntity_extremeMixin",
+    "LlamaSpitEntity_extremeMixin",
+    "ProjectileEntity_extremeMixin",
+
     "ArmorStandEntity_scarpetMarkerMixin",
     "Entity_scarpetEventsMixin",
     "LivingEntity_scarpetEventsMixin",
     "DamageTracker_scarpetEventMixin",
     "ServerPlayerEntity_scarpetEventMixin",
     "FallingBlockEntity_scarpetEventsMixin",
+    "BlockItem_scarpetEventMixin",
+
     "ChunkTicketManager_scarpetMixin",
     "ServerChunkManager_scarpetMixin",
+    "StatType_scarpetMixin",
+    "PointOfInterest_scarpetMixin",
 
 
     "PistonBlock_movableTEMixin",
@@ -160,7 +180,8 @@
     "ClientPlayerInteractionManager_ghostBlocksMixin",
 
     "BlockEntityRenderDispatcher_movableTEMixin",
-    "PistonBlockEntityRenderer_movableTEMixin"
+    "PistonBlockEntityRenderer_movableTEMixin",
+    "ClientPlayNetworkHandler_smoothClientAnimationsMixin"
   ],
   "server": [
     "MinecraftDedicatedServerMixin"

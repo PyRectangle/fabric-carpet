@@ -2,18 +2,22 @@ package carpet.script.value;
 
 import carpet.script.Context;
 import carpet.script.Expression;
-import carpet.script.ExpressionInspector;
 import carpet.script.Fluff;
 import carpet.script.LazyValue;
 import carpet.script.Tokenizer;
+import carpet.script.exception.BreakStatement;
+import carpet.script.exception.ContinueStatement;
 import carpet.script.exception.ExitStatement;
 import carpet.script.exception.ExpressionException;
 import carpet.script.exception.InternalExpressionException;
 import carpet.script.exception.ReturnStatement;
 import carpet.script.exception.ThrowStatement;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class FunctionValue extends Value implements Fluff.ILazyFunction
 {
@@ -26,7 +30,7 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
     private static long variantCounter = 1;
     private long variant;
 
-    public FunctionValue(Expression expression, Tokenizer.Token token, String name, LazyValue body, List<String> args)
+    private FunctionValue(Expression expression, Tokenizer.Token token, String name, LazyValue body, List<String> args)
     {
         this.expression = expression;
         this.token = token;
@@ -53,6 +57,18 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
     {
         return name;
     }
+
+    @Override
+    public String getPrettyString()
+    {
+        List<String> stringArgs= new ArrayList<>(args);
+        if (outerState != null)
+            stringArgs.addAll(outerState.entrySet().stream().map(e ->
+                    "outer("+e.getKey()+") = "+e.getValue().evalValue(null).getPrettyString()).collect(Collectors.toList()));
+        return (name.equals("_")?"<lambda>":name) +"("+String.join(", ",stringArgs)+")";
+    }
+
+    public String fullName() {return (name.equals("_")?"<lambda>":name)+(expression.module == null?"":"["+expression.module.getName()+"]");}
 
     @Override
     public boolean getBoolean()
@@ -103,6 +119,12 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
     }
 
     @Override
+    public String getTypeString()
+    {
+        return "function";
+    }
+
+    @Override
     public Value slice(long from, long to)
     {
         throw new InternalExpressionException("Cannot slice a function");
@@ -122,19 +144,24 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
 
     public LazyValue callInContext(Expression callingExpression, Context c, Integer type, Expression e, Tokenizer.Token t, List<LazyValue> lazyParams)
     {
-        // this hole thing might not be really needed
-        Expression callContext = ExpressionInspector.Expression_cloneWithName(callingExpression, name, t);
         try
         {
             return lazyEval(c, type, e, t, lazyParams);
         }
+        catch (ExpressionException exc)
+        {
+            exc.stack.add(this);
+            throw exc;
+        }
         catch (InternalExpressionException exc)
         {
-            throw new ExpressionException(callContext, t, exc.getMessage());
+            exc.stack.add(this);
+            throw new ExpressionException(c, e, t, exc.getMessage(), exc.stack);
         }
+
         catch (ArithmeticException exc)
         {
-            throw new ExpressionException(callContext, t, "Your math is wrong, "+exc.getMessage());
+            throw new ExpressionException(c, e, t, "Your math is wrong, "+exc.getMessage(), Collections.singletonList(this));
         }
     }
 
@@ -144,7 +171,7 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
         if (args.size() != lazyParams.size()) // something that might be subject to change in the future
                                               // in case we add variable arguments
         {
-            throw new ExpressionException(e, t,
+            throw new ExpressionException(c, e, t,
                     "Incorrect number of arguments for function "+name+
                             ". Should be "+args.size()+", not "+lazyParams.size()+" like "+args
             );
@@ -164,6 +191,10 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
         {
             retVal = body.evalValue(newFrame, type); // todo not sure if we need to propagete type / consider boolean context in defined functions - answer seems ye
         }
+        catch (BreakStatement | ContinueStatement exc)
+        {
+            throw new ExpressionException(c, e, t, "'continue' and 'break' can only be called inside loop function bodies");
+        }
         catch (ReturnStatement returnStatement)
         {
             retVal = returnStatement.retval;
@@ -173,14 +204,10 @@ public class FunctionValue extends Value implements Fluff.ILazyFunction
             retVal = throwStatement.retval;
             rethrow = true;
         }
-        catch (ArithmeticException | ExitStatement | ExpressionException exc)
-        {
-            throw exc; // rethrow so could be contextualized if needed
-        }
-        catch (Exception exc)
-        {
-            throw new ExpressionException(e, t, "Error while evaluating expression: "+exc.getMessage());
-        }
+        //catch (ArithmeticException | ExitStatement | ExpressionException | InternalExpressionException exc )
+        //{
+        //    throw exc; // rethrow so could be contextualized if needed
+        //}
         if (rethrow)
         {
             throw new ThrowStatement(retVal);

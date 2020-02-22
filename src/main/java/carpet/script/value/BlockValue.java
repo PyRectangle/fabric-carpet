@@ -21,6 +21,7 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.registry.Registry;
 import net.minecraft.world.World;
+import net.minecraft.world.chunk.WorldChunk;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,8 +36,8 @@ public class BlockValue extends Value
     public static final BlockValue AIR = new BlockValue(Blocks.AIR.getDefaultState(), null, BlockPos.ORIGIN);
     public static final BlockValue NULL = new BlockValue(null, null, null);
     private BlockState blockState;
-    private BlockPos pos;
-    private ServerWorld world;
+    private final BlockPos pos;
+    private final ServerWorld world;
     private CompoundTag data;
 
     public static BlockValue fromCoords(CarpetContext c, int x, int y, int z)
@@ -45,7 +46,7 @@ public class BlockValue extends Value
         return new BlockValue(null, c.s.getWorld(), pos);
     }
 
-    private static Map<String, BlockValue> bvCache= new HashMap<>();
+    private static final Map<String, BlockValue> bvCache= new HashMap<>();
     public static BlockValue fromString(String str)
     {
         try
@@ -129,15 +130,24 @@ public class BlockValue extends Value
 
     public static LocatorResult fromParams(CarpetContext c, List<LazyValue> params, int offset)
     {
-        return fromParams(c, params,offset, false);
+        return fromParams(c, params,offset, false, false);
     }
 
     public static LocatorResult fromParams(CarpetContext c, List<LazyValue> params, int offset, boolean acceptString)
+    {
+        return fromParams(c, params,offset, acceptString, false);
+    }
+
+    public static LocatorResult fromParams(CarpetContext c, List<LazyValue> params, int offset, boolean acceptString, boolean optional)
     {
         try
         {
             Value v1 = params.get(0 + offset).evalValue(c);
             //add conditional from string name
+            if (optional && v1 instanceof NullValue)
+            {
+                return new LocatorResult(null, 1+offset);
+            }
             if (acceptString && v1 instanceof StringValue)
             {
                 return new LocatorResult(fromString(v1.getString()), 1+offset);
@@ -174,7 +184,7 @@ public class BlockValue extends Value
         }
         catch (IndexOutOfBoundsException e)
         {
-            throw new InternalExpressionException("Position should be defined either by three coordinates, or a block value");
+            throw new InternalExpressionException("Block should be defined either by three coordinates, a block value, or a proper string");
         }
     }
 
@@ -192,6 +202,15 @@ public class BlockValue extends Value
         throw new InternalExpressionException("Attempted to fetch block state without world or stored block state");
     }
 
+    public static BlockEntity getBlockEntity(ServerWorld world, BlockPos pos)
+    {
+        if (world.getServer().isOnThread())
+            return world.getBlockEntity(pos);
+        else
+            return world.getWorldChunk(pos).getBlockEntity(pos, WorldChunk.CreationType.IMMEDIATE);
+    }
+
+
     public CompoundTag getData()
     {
         if (data != null)
@@ -202,7 +221,7 @@ public class BlockValue extends Value
         }
         if (world != null && pos != null)
         {
-            BlockEntity be = world.getBlockEntity(pos);
+            BlockEntity be = getBlockEntity(world, pos);
             CompoundTag tag = new CompoundTag();
             if (be == null)
             {
@@ -275,8 +294,8 @@ public class BlockValue extends Value
 
     public static class LocatorResult
     {
-        public BlockValue block;
-        public int offset;
+        public final BlockValue block;
+        public final int offset;
         LocatorResult(BlockValue b, int o)
         {
             block = b;
@@ -287,9 +306,9 @@ public class BlockValue extends Value
     public static class VectorLocator
     {
         public Vec3d vec;
-        public int offset;
-        public double yaw;
-        public double pitch;
+        public final int offset;
+        public final double yaw;
+        public final double pitch;
         public boolean fromBlock;
         VectorLocator(Vec3d v, int o)
         {
@@ -339,9 +358,9 @@ public class BlockValue extends Value
         EASTUP("east-up", 0.0, 0.6, 0.5, Direction.EAST),
         WESTUP("west-up", 1.0, 0.6, 0.5, Direction.WEST);
 
-        public String name;
-        public Vec3d hitOffset;
-        public Direction facing;
+        public final String name;
+        public final Vec3d hitOffset;
+        public final Direction facing;
 
         private static final Map<String, SpecificDirection> DIRECTION_MAP = Arrays.stream(values()).collect(Collectors.toMap(SpecificDirection::getName, d -> d));
 

@@ -77,10 +77,16 @@ public class MapValue extends AbstractListValue implements ContainerValueInterfa
         map = other;
     }
 
+    public static MapValue wrap(Map<Value,Value> other)
+    {
+        return new MapValue(other);
+    }
+
     @Override
     public Value add(Value o)
     {
-        throw new InternalExpressionException("Cannot add to a map value");
+        append(o);
+        return this;
     }
 
     @Override
@@ -119,7 +125,7 @@ public class MapValue extends AbstractListValue implements ContainerValueInterfa
     @Override
     public void append(Value v)
     {
-        put(v);
+        map.put(v, Value.NULL);
     }
 
     @Override

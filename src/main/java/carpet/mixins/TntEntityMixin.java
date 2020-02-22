@@ -1,7 +1,7 @@
 package carpet.mixins;
 
 import carpet.fakes.TntEntityInterface;
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
@@ -36,7 +36,7 @@ public abstract class TntEntityMixin extends Entity implements TntEntityInterfac
                 at = @At("RETURN"))
     private void modifyTNTAngle(World world, double x, double y, double z, LivingEntity entity, CallbackInfo ci)
     {
-        if (CarpetSettings.hardcodeTNTangle != -1)
+        if (CarpetSettings.hardcodeTNTangle != -1.0D)
             setVelocity(-Math.sin(CarpetSettings.hardcodeTNTangle) * 0.02, 0.2, -Math.cos(CarpetSettings.hardcodeTNTangle) * 0.02);
     }
 

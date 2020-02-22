@@ -1,6 +1,6 @@
 package carpet.utils;
 
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.block.entity.BlockEntity;
@@ -21,9 +21,9 @@ public class CarpetProfiler
     private static int tick_health_elapsed = 0;
     private static TYPE test_type = TYPE.NONE; //1 for ticks, 2 for entities;
     private static long current_tick_start = 0;
-    private static String[] GENERAL_SECTIONS = {"Network", "Autosave", "Async Tasks"};
-    private static String[] DIMENSIONS = {"overworld", "the_end", "the_nether"};
-    private static String[] SECTIONS = {
+    private static final String[] GENERAL_SECTIONS = {"Network", "Autosave", "Async Tasks"};
+    private static final String[] DIMENSIONS = {"overworld", "the_end", "the_nether"};
+    private static final String[] SECTIONS = {
             "Spawning and Random Ticks", "Ticket Manager","Unloading",
             "Blocks", "Entities", "Block Entities",
             "Entities (Client)", "Block Entities (Client)",
@@ -39,10 +39,10 @@ public class CarpetProfiler
 
     public static class ProfilerToken
     {
-        public TYPE type;
-        public Object section;
-        public long start;
-        public World world;
+        public final TYPE type;
+        public final Object section;
+        public final long start;
+        public final World world;
 
         public ProfilerToken(TYPE type, Object section, World world, long start)
         {
@@ -212,7 +212,7 @@ public class CarpetProfiler
         long total_tick_time = time_repo.get("tick");
         double divider = 1.0D / tick_health_requested / 1000000;
         Messenger.m(currentRequester, "w ");
-        Messenger.m(currentRequester, String.format("gi Average tick time: %.3fms", divider * total_tick_time));
+        Messenger.m(currentRequester, String.format("gi Avg. server tick time: %.3fms", divider * total_tick_time));
         long accumulated = 0L;
 
         for (String section : GENERAL_SECTIONS)
@@ -247,7 +247,7 @@ public class CarpetProfiler
                 double amount = divider * time_repo.get(dimension + "." + section);
                 if (amount > 0.01)
                 {
-                    if (!(section.endsWith("(client)")))
+                    if (!(section.endsWith("(Client)")))
                         accumulated += time_repo.get(dimension + "." + section);
                     Messenger.m(currentRequester, String.format("gi  - %s: %.3fms", section, amount));
                 }

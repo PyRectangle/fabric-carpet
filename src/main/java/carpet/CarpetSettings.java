@@ -1,6 +1,8 @@
-package carpet.settings;
+package carpet;
 
-import carpet.CarpetServer;
+import carpet.settings.ParsedRule;
+import carpet.settings.Rule;
+import carpet.settings.Validator;
 import carpet.utils.Messenger;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
@@ -27,9 +29,10 @@ import static carpet.settings.RuleCategory.SURVIVAL;
 import static carpet.settings.RuleCategory.TNT;
 import static carpet.settings.RuleCategory.DISPENSER;
 
+@SuppressWarnings("CanBeFinal")
 public class CarpetSettings
 {
-    public static final String carpetVersion = "1.2.5+v191130";
+    public static final String carpetVersion = "1.3.7+v200127";
     public static final Logger LOG = LogManager.getLogger();
     public static boolean skipGenerationChecks = false;
     public static boolean impendingFillSkipUpdates = false;
@@ -100,7 +103,8 @@ public class CarpetSettings
     @Rule( desc = "TNT causes less lag when exploding in the same spot and in liquids", category = TNT)
     public static boolean optimizedTNT = false;
 
-    private static class CheckOptimizedTntEnabledValidator<T> extends Validator<T> {
+    private static class CheckOptimizedTntEnabledValidator<T> extends Validator<T>
+    {
         @Override
         public T validate(ServerCommandSource source, ParsedRule<T> currentRule, T newValue, String string) {
             return optimizedTNT || currentRule.defaultValue.equals(newValue) ? newValue : null;
@@ -130,7 +134,7 @@ public class CarpetSettings
 
     @Rule( desc = "Sets the horizontal random angle on TNT for debugging of TNT contraptions", category = TNT, options = "-1", strict = false,
             validate = TNTAngleValidator.class, extra = "Set to -1 for default behavior")
-    public static double hardcodeTNTangle;
+    public static double hardcodeTNTangle = -1.0D;
 
     private static class TNTAngleValidator extends Validator<Double> {
         @Override
@@ -335,6 +339,9 @@ public class CarpetSettings
     @Rule(desc = "fill/clone/setblock and structure blocks cause block updates", category = CREATIVE)
     public static boolean fillUpdates = true;
 
+    @Rule(desc = "placing blocks cause block updates", category = CREATIVE)
+    public static boolean interactionUpdates = true;
+
     @Rule(desc = "smooth client animations with low tps settings", extra = "works only in SP, and will slow down players", category = CREATIVE)
     public static boolean smoothClientAnimations;
 
@@ -385,6 +392,16 @@ public class CarpetSettings
             validate = FillLimitLimits.class
     )
     public static int fillLimit = 32768;
+
+
+    @Rule(
+            desc = "Customizable forceload chunk limit",
+            options = {"256"},
+            category = CREATIVE,
+            strict = false,
+            validate = FillLimitLimits.class
+    )
+    public static int forceloadLimit = 256;
 
     @Rule(
             desc = "Customizable maximal entity collision limits, 0 for no limits",
@@ -542,4 +559,17 @@ public class CarpetSettings
             category = {EXPERIMENTAL, CREATIVE}
     )
     public static boolean flatWorldStructureSpawning = false;
+
+    @Rule(
+            desc = "Edge cases are as frequent as common cases, for testing only!!",
+            extra = {"Velocities of items from dispensers, blaze projectiles, fireworks ",
+                    "Directions of fireballs, wither skulls, fishing bobbers, ",
+                    "items dropped from blocks and inventories, llamas spit, triggered trap horses",
+                    "Damage dealt with projectiles",
+                    "Blaze aggro sensitivity",
+                    "Mobs spawned follow range"
+            },
+            category = CREATIVE
+    )
+    public static boolean extremeBehaviours = false;
 }

@@ -1,6 +1,6 @@
 package carpet.commands;
 
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import carpet.helpers.TickSpeed;
 import carpet.utils.CarpetProfiler;
 import carpet.utils.Messenger;

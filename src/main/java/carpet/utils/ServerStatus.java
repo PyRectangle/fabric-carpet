@@ -1,7 +1,7 @@
 package carpet.utils;
 
 import carpet.patches.EntityPlayerMPFake;
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import com.google.gson.Gson;
 import fi.iki.elonen.NanoHTTPD;
 import net.minecraft.server.MinecraftServer;

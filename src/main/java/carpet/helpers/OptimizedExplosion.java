@@ -7,14 +7,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import carpet.mixins.ExplosionAccessor;
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import carpet.utils.Messenger;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.Material;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.TntEntity;
-import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.item.ItemStack;
 import net.minecraft.particle.ParticleTypes;
@@ -334,7 +333,7 @@ public class OptimizedExplosion
 
     private static void getAffectedPositionsOnPlaneX(Explosion e, int x, int yStart, int yEnd, int zStart, int zEnd)
     {
-        if (rayCalcDone == false)
+        if (!rayCalcDone)
         {
             final double xRel = (double) x / 15.0D * 2.0D - 1.0D;
 
@@ -357,7 +356,7 @@ public class OptimizedExplosion
 
     private static void getAffectedPositionsOnPlaneY(Explosion e, int y, int xStart, int xEnd, int zStart, int zEnd)
     {
-        if (rayCalcDone == false)
+        if (!rayCalcDone)
         {
             final double yRel = (double) y / 15.0D * 2.0D - 1.0D;
 
@@ -380,7 +379,7 @@ public class OptimizedExplosion
 
     private static void getAffectedPositionsOnPlaneZ(Explosion e, int z, int xStart, int xEnd, int yStart, int yEnd)
     {
-        if (rayCalcDone == false)
+        if (!rayCalcDone)
         {
             final double zRel = (double) z / 15.0D * 2.0D - 1.0D;
 
