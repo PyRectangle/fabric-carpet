@@ -5,6 +5,7 @@ import carpet.script.value.BlockValue;
 import carpet.script.value.EntityValue;
 import carpet.script.value.FunctionValue;
 import carpet.script.value.ListValue;
+import carpet.script.value.NBTSerializableValue;
 import carpet.script.value.NumericValue;
 import carpet.script.value.StringValue;
 import carpet.script.value.Value;
@@ -13,11 +14,15 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.stat.Stat;
+import net.minecraft.stat.Stats;
 import net.minecraft.util.Hand;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.registry.Registry;
 import net.minecraft.world.dimension.DimensionType;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -25,10 +30,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -36,12 +43,12 @@ import java.util.stream.Collectors;
 
 public class CarpetEventServer
 {
-    public List<ScheduledCall> scheduledCalls = new LinkedList<>();
+    public final List<ScheduledCall> scheduledCalls = new LinkedList<>();
 
     public static class Callback
     {
-        public String host;
-        public FunctionValue function;
+        public final String host;
+        public final FunctionValue function;
 
         public Callback(String host, FunctionValue function)
         {
@@ -58,8 +65,8 @@ public class CarpetEventServer
 
     public static class ScheduledCall extends Callback
     {
-        public List<Value> args;
-        private CarpetContext ctx;
+        public final List<Value> args;
+        private final CarpetContext ctx;
         public long dueTime;
 
         public ScheduledCall(CarpetContext context, FunctionValue function, List<Value> args, long dueTime)
@@ -96,8 +103,8 @@ public class CarpetEventServer
     public static class CallbackList
     {
 
-        public List<Callback> callList;
-        public int reqArgs;
+        public final List<Callback> callList;
+        public final int reqArgs;
 
         public CallbackList(int reqArgs)
         {
@@ -123,7 +130,7 @@ public class CarpetEventServer
                 // impossible call to add
                 return false;
             }
-            FunctionValue udf = host.globalFunctions.get(funName);
+            FunctionValue udf = host.getFunction(funName);
             if (udf == null || udf.getArguments().size() != reqArgs)
             {
                 // call won't match arguments
@@ -289,6 +296,43 @@ public class CarpetEventServer
                 }, player::getCommandSource);
             }
         },
+        PLAYER_INTERACTS_WITH_BLOCK("player_interacts_with_block", new CallbackList(5))
+        {
+            @Override
+            public void onBlockHit(ServerPlayerEntity player, Hand enumhand, BlockHitResult hitRes)
+            {
+                handler.call( () ->
+                {
+                    BlockPos blockpos = hitRes.getBlockPos();
+                    Direction enumfacing = hitRes.getSide();
+                    Vec3d vec3d = hitRes.getPos().subtract(blockpos.getX(), blockpos.getY(), blockpos.getZ());
+                    return Arrays.asList(
+                            ((c, t) -> new EntityValue(player)),
+                            ((c, t) -> new StringValue(enumhand == Hand.MAIN_HAND ? "mainhand" : "offhand")),
+                            ((c, t) -> new BlockValue(null, player.getServerWorld(), blockpos)),
+                            ((c, t) -> new StringValue(enumfacing.getName())),
+                            ((c, t) -> ListValue.of(
+                                    new NumericValue(vec3d.x),
+                                    new NumericValue(vec3d.y),
+                                    new NumericValue(vec3d.z)
+                            ))
+                    );
+                }, player::getCommandSource);
+            }
+        },
+        PLAYER_PLACES_BLOCK("player_places_block", new CallbackList(4))
+        {
+            @Override
+            public void onBlockPlaced(ServerPlayerEntity player, BlockPos pos, Hand enumhand, ItemStack itemstack)
+            {
+                handler.call( () -> Arrays.asList(
+                        ((c, t) -> new EntityValue(player)),
+                        ((c, t) -> ListValue.fromItemStack(itemstack)),
+                        ((c, t) -> new StringValue(enumhand == Hand.MAIN_HAND ? "mainhand" : "offhand")),
+                        ((c, t) -> new BlockValue(null, player.getServerWorld(), pos))
+                ), player::getCommandSource);
+            }
+        },
         PLAYER_BREAK_BLOCK("player_breaks_block",new CallbackList(2))
         {
             @Override
@@ -300,7 +344,7 @@ public class CarpetEventServer
                 ), player::getCommandSource);
             }
         },
-        PLAYER_INERACTSW_WITH_ENTITY("player_interacts_with_entity",new CallbackList(3))
+        PLAYER_INTERACTS_WITH_ENTITY("player_interacts_with_entity",new CallbackList(3))
         {
             @Override
             public void onEntityAction(ServerPlayerEntity player, Entity entity, Hand enumhand)
@@ -403,18 +447,43 @@ public class CarpetEventServer
             {
                 handler.call( () -> Collections.singletonList(((c, t) -> new EntityValue(player))), player::getCommandSource);
             }
-        };
+        },
+        STATISTICS("statistic", new CallbackList(4))
+        {
+            private <T> Identifier getStatId(Stat<T> stat)
+            {
+                return stat.getType().getRegistry().getId(stat.getValue());
+            }
+            private final Set<Identifier> skippedStats = new HashSet<Identifier>(){{
+                add(Stats.TIME_SINCE_DEATH);
+                add(Stats.TIME_SINCE_REST);
+                add(Stats.PLAY_ONE_MINUTE);
+            }};
+            @Override
+            public void onPlayerStatistic(ServerPlayerEntity player, Stat<?> stat, int amount)
+            {
+                Identifier id = getStatId(stat);
+                if (skippedStats.contains(id)) return;
+                handler.call( () -> Arrays.asList(
+                        ((c, t) -> new EntityValue(player)),
+                        ((c, t) -> new StringValue(NBTSerializableValue.nameFromRegistryId(Registry.STAT_TYPE.getId(stat.getType())))),
+                        ((c, t) -> new StringValue(NBTSerializableValue.nameFromRegistryId(id))),
+                        ((c, t) -> new NumericValue(amount))
+                ), player::getCommandSource);
+            }
+        }
+        ;
 
         // on projectile thrown (arrow from bows, crossbows, tridents, snoballs, e-pearls
 
-        public String name;
-        public static Map<String, Event> byName = new HashMap<String, Event>(){{
+        public final String name;
+        public static final Map<String, Event> byName = new HashMap<String, Event>(){{
             for (Event e: Event.values())
             {
                 put(e.name, e);
             }
         }};
-        public CallbackList handler;
+        public final CallbackList handler;
         Event(String name, CallbackList eventHandler)
         {
             this.name = name;
@@ -427,11 +496,13 @@ public class CarpetEventServer
         //stubs for calls just to ease calls in vanilla code so they don't need to deal with scarpet value types
         public void onTick() { }
         public void onPlayerEvent(ServerPlayerEntity player) { }
+        public void onPlayerStatistic(ServerPlayerEntity player, Stat<?> stat, int amount) { }
         public void onMountControls(ServerPlayerEntity player, float strafeSpeed, float forwardSpeed, boolean jumping, boolean sneaking) { }
         public void onItemAction(ServerPlayerEntity player, Hand enumhand, ItemStack itemstack) { }
         public void onBlockAction(ServerPlayerEntity player, BlockPos blockpos, Direction facing) { }
         public void onBlockHit(ServerPlayerEntity player, Hand enumhand, BlockHitResult hitRes) { }
         public void onBlockBroken(ServerPlayerEntity player, BlockPos pos, BlockState previousBS) { }
+        public void onBlockPlaced(ServerPlayerEntity player, BlockPos pos, Hand enumhand, ItemStack itemstack) { }
         public void onEntityAction(ServerPlayerEntity player, Entity entity, Hand enumhand) { }
     }
 

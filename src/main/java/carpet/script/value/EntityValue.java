@@ -26,9 +26,11 @@ import net.minecraft.entity.effect.StatusEffect;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.mob.MobEntityWithAi;
+import net.minecraft.entity.passive.PassiveEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.predicate.entity.EntityPredicates;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -61,14 +63,14 @@ import static carpet.script.value.NBTSerializableValue.nameFromRegistryId;
 // TODO: decide whether copy(entity) should duplicate entity in the world.
 public class EntityValue extends Value
 {
-    private Entity entity;
+    private final Entity entity;
 
     public EntityValue(Entity e)
     {
         entity = e;
     }
 
-    private static Map<String, EntitySelector> selectorCache = new HashMap<>();
+    private static final Map<String, EntitySelector> selectorCache = new HashMap<>();
     public static Collection<? extends Entity > getEntitiesFromSelector(ServerCommandSource source, String selector)
     {
         try
@@ -91,6 +93,25 @@ public class EntityValue extends Value
     public Entity getEntity()
     {
         return entity;
+    }
+
+    public static ServerPlayerEntity getPlayerByValue(MinecraftServer server, Value value)
+    {
+        ServerPlayerEntity player = null;
+        if (value instanceof EntityValue)
+        {
+            Entity e = ((EntityValue) value).getEntity();
+            if (e instanceof ServerPlayerEntity)
+            {
+                player = (ServerPlayerEntity) e;
+            }
+        }
+        else
+        {
+            String playerName = value.getString();
+            player = server.getPlayerManager().getPlayer(playerName);
+        }
+        return player;
     }
 
     @Override
@@ -157,7 +178,7 @@ public class EntityValue extends Value
         return res; //TODO add more here like search by tags, or type
         //if (who.startsWith('tag:'))
     }
-    private static Map<String, Pair<EntityType<?>, Predicate<? super Entity>>> entityPredicates =
+    private static final Map<String, Pair<EntityType<?>, Predicate<? super Entity>>> entityPredicates =
             new HashMap<String, Pair<EntityType<?>, Predicate<? super Entity>>>()
     {{
         put("*", Pair.of(null, EntityPredicates.VALID_ENTITY));
@@ -172,7 +193,7 @@ public class EntityValue extends Value
             throw new InternalExpressionException("Unknown entity feature: "+what);
         return featureAccessors.get(what).apply(entity, arg);
     }
-    private static Map<String, EquipmentSlot> inventorySlots = new HashMap<String, EquipmentSlot>(){{
+    private static final Map<String, EquipmentSlot> inventorySlots = new HashMap<String, EquipmentSlot>(){{
         put("mainhand", EquipmentSlot.MAINHAND);
         put("offhand", EquipmentSlot.OFFHAND);
         put("head", EquipmentSlot.HEAD);
@@ -180,7 +201,7 @@ public class EntityValue extends Value
         put("legs", EquipmentSlot.LEGS);
         put("feet", EquipmentSlot.FEET);
     }};
-    private static Map<String, BiFunction<Entity, Value, Value>> featureAccessors = new HashMap<String, BiFunction<Entity, Value, Value>>() {{
+    private static final Map<String, BiFunction<Entity, Value, Value>> featureAccessors = new HashMap<String, BiFunction<Entity, Value, Value>>() {{
         //put("test", (e, a) -> a == null ? Value.NULL : new StringValue(a.getString()));
         put("removed", (entity, arg) -> new NumericValue(entity.removed));
         put("uuid",(e, a) -> new StringValue(e.getUuidAsString()));
@@ -223,8 +244,9 @@ public class EntityValue extends Value
         put("dimension", (e, a) -> new StringValue(nameFromRegistryId(Registry.DIMENSION.getId(e.dimension))));
         put("height", (e, a) -> new NumericValue(e.getDimensions(EntityPose.STANDING).height));
         put("width", (e, a) -> new NumericValue(e.getDimensions(EntityPose.STANDING).width));
-        put("eye_height", (e, a) -> new NumericValue(e.getEyeHeight(EntityPose.STANDING)));
+        put("eye_height", (e, a) -> new NumericValue(e.getStandingEyeHeight()));
         put("age", (e, a) -> new NumericValue(e.age));
+        put("breeding_age", (e, a) -> e instanceof PassiveEntity?new NumericValue(((PassiveEntity) e).getBreedingAge()):Value.NULL);
         put("despawn_timer", (e, a) -> e instanceof LivingEntity?new NumericValue(((LivingEntity) e).getDespawnCounter()):Value.NULL);
         put("item", (e, a) -> (e instanceof ItemEntity)?ListValue.fromItemStack(((ItemEntity) e).getStack()):Value.NULL);
         put("count", (e, a) -> (e instanceof ItemEntity)?new NumericValue(((ItemEntity) e).getStack().getCount()):Value.NULL);
@@ -273,6 +295,22 @@ public class EntityValue extends Value
             }
             return Value.NULL;
         });
+
+        put("permission_level", (e, a) -> {
+            if (e instanceof  ServerPlayerEntity)
+            {
+                ServerPlayerEntity spe = (ServerPlayerEntity) e;
+                for (int i=4; i>=0; i--)
+                {
+                    if (spe.allowsPermissionLevel(i))
+                        return new NumericValue(i);
+
+                }
+                return new NumericValue(0);
+            }
+            return Value.NULL;
+        });
+
         //spectating_entity
         // isGlowing
         put("effect", (e, a) ->
@@ -347,6 +385,7 @@ public class EntityValue extends Value
             float reach = 4.5f;
             boolean entities = true;
             boolean liquids = false;
+            boolean blocks = true;
 
             if (a!=null)
             {
@@ -363,12 +402,14 @@ public class EntityValue extends Value
                     if (args.size() > 1)
                     {
                         entities = false;
+                        blocks = false;
                         for (int i = 1; i < args.size(); i++)
                         {
                             String what = args.get(i).getString();
                             if (what.equalsIgnoreCase("entities"))
                                 entities = true;
-                            else if (what.equalsIgnoreCase("blocks")) {}
+                            else if (what.equalsIgnoreCase("blocks"))
+                                blocks = true;
                             else if (what.equalsIgnoreCase("liquids"))
                                 liquids = true;
                             else throw new InternalExpressionException("Incorrect tracing: "+what);
@@ -382,11 +423,14 @@ public class EntityValue extends Value
             }
 
             HitResult hitres;
-            if (entities)
+            if (entities && !blocks)
+                hitres = Tracer.rayTraceEntities(e, 1, reach, reach*reach);
+            else if (entities)
                 hitres = Tracer.rayTrace(e, 1, reach, liquids);
             else
                 hitres = Tracer.rayTraceBlocks(e, 1, reach, liquids);
 
+            if (hitres == null) return Value.NULL;
             switch (hitres.getType())
             {
                 case MISS: return Value.NULL;
@@ -403,20 +447,6 @@ public class EntityValue extends Value
             return new NBTSerializableValue(nbttagcompound).get(a);
         });
     }};
-
-    private static <Req extends Entity> Req assertEntityArgType(Class<Req> klass, Value arg)
-    {
-        if (!(arg instanceof EntityValue))
-        {
-            return null;
-        }
-        Entity e = ((EntityValue) arg).getEntity();
-        if (!(klass.isAssignableFrom(e.getClass())))
-        {
-            return null;
-        }
-        return (Req)e;
-    }
 
     public void set(String what, Value toWhat)
     {
@@ -479,7 +509,7 @@ public class EntityValue extends Value
 
 
 
-    private static Map<String, BiConsumer<Entity, Value>> featureModifiers = new HashMap<String, BiConsumer<Entity, Value>>() {{
+    private static final Map<String, BiConsumer<Entity, Value>> featureModifiers = new HashMap<String, BiConsumer<Entity, Value>>() {{
         put("remove", (entity, value) -> entity.remove());
         put("health", (e, v) -> { if (e instanceof LivingEntity) ((LivingEntity) e).setHealth((float) NumericValue.asNumber(v).getDouble()); });
         put("kill", (e, v) -> e.kill());
@@ -659,6 +689,13 @@ public class EntityValue extends Value
         //        ((MobEntity) e).setTarget(elb);
         //    }
         //});
+        put("breeding_age", (e, v) ->
+        {
+            if (e instanceof PassiveEntity)
+            {
+                ((PassiveEntity) e).setBreedingAge((int)NumericValue.asNumber(v).getLong());
+            }
+        });
         put("talk", (e, v) -> {
             // attacks indefinitely
             if (e instanceof MobEntity)
@@ -755,6 +792,47 @@ public class EntityValue extends Value
                 e.noClip = true;
             else
                 e.noClip = v.getBoolean();
+        });
+        put("effect", (e, v) ->
+        {
+            if (!(e instanceof LivingEntity)) return;
+            LivingEntity le = (LivingEntity)e;
+            if (v == null)
+                le.clearPotionEffects();
+            else if (v instanceof ListValue)
+            {
+                List<Value> lv = ((ListValue) v).getItems();
+                if (lv.size() >= 1 && lv.size() <= 5)
+                {
+                    String effectName = lv.get(0).getString();
+                    StatusEffect effect = Registry.STATUS_EFFECT.get(new Identifier(effectName));
+                    if (effect == null)
+                        throw new InternalExpressionException("Wrong effect name: "+effectName);
+                    if (lv.size() == 1)
+                    {
+                        le.removeStatusEffect(effect);
+                        return;
+                    }
+                    int duration = (int)NumericValue.asNumber(lv.get(1)).getLong();
+                    if (duration <= 0)
+                    {
+                        le.removeStatusEffect(effect);
+                        return;
+                    } 
+                    int amplifier = 0;
+                    if (lv.size() > 2)
+                        amplifier = (int)NumericValue.asNumber(lv.get(2)).getLong();
+                    boolean showParticles = true;
+                    if (lv.size() > 3)
+                        showParticles = lv.get(3).getBoolean();
+                    boolean showIcon = true;
+                    if (lv.size() > 4)
+                        showIcon = lv.get(4).getBoolean();
+                    le.addPotionEffect(new StatusEffectInstance(effect, duration, amplifier, showParticles, showIcon));
+                    return;
+                }
+            }
+            throw new InternalExpressionException("'effect' needs either no arguments (clear) or effect name, duration, and optional amplifier, show particles and show icon");
         });
 
         // gamemode

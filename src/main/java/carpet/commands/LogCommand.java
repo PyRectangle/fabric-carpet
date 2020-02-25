@@ -1,6 +1,6 @@
 package carpet.commands;
 
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import carpet.logging.Logger;
 import carpet.logging.LoggerRegistry;
 import carpet.settings.SettingsManager;
@@ -43,7 +43,7 @@ public class LogCommand
                                 c.getSource(),
                                 c.getSource().getName(),
                                 getString(c, "log name")))).
-                then(CommandManager.argument("option", StringArgumentType.word()).
+                then(CommandManager.argument("option", StringArgumentType.greedyString()).
                         suggests( (c, b) -> suggestMatching(
                                 (LoggerRegistry.getLogger(getString(c, "log name"))==null
                                         ?new String[]{}

@@ -1,6 +1,7 @@
 package carpet.settings;
 
 import carpet.CarpetServer;
+import carpet.CarpetSettings;
 import carpet.utils.Messenger;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
@@ -138,13 +139,16 @@ public class SettingsManager
         return server.getLevelStorage().resolveFile(server.getLevelName(), identifier+".conf");
     }
 
-    public void disableBooleanFromCategory(String category)
+    public void disableBooleanCommands()
     {
         for (ParsedRule<?> rule : rules.values())
         {
-            if (rule.type != boolean.class || !rule.categories.contains(category))
+            if (!rule.categories.contains(RuleCategory.COMMAND))
                 continue;
-            ((ParsedRule<Boolean>) rule).set(server.getCommandSource(), false, "false");
+            if (rule.type == boolean.class)
+                ((ParsedRule<Boolean>) rule).set(server.getCommandSource(), false, "false");
+            if (rule.type == String.class && rule.options.contains("false"))
+                ((ParsedRule<String>) rule).set(server.getCommandSource(), "false", "false");
         }
     }
 
@@ -210,7 +214,7 @@ public class SettingsManager
         if (conf.getRight())
         {
             CarpetSettings.LOG.info("[CM]: "+fancyName+" features are locked by the administrator");
-            disableBooleanFromCategory(RuleCategory.COMMAND);
+            disableBooleanCommands();
         }
         for (String key: conf.getLeft().keySet())
         {
@@ -238,7 +242,7 @@ public class SettingsManager
             Map<String,String> result = new HashMap<String, String>();
             while ((line = reader.readLine()) != null)
             {
-                line = line.replaceAll("\\r|\\n", "");
+                line = line.replaceAll("[\\r\\n]", "");
                 if ("locked".equalsIgnoreCase(line))
                 {
                     confLocked = true;
@@ -282,9 +286,7 @@ public class SettingsManager
         {
             if (rule.name.toLowerCase(Locale.ROOT).contains(lcSearch)) return true; // substring match, case insensitive
             for (String c : rule.categories) if (c.equals(search)) return true; // category exactly, case sensitive
-            if (Sets.newHashSet(rule.description.toLowerCase(Locale.ROOT).split("\\W+")).contains(lcSearch))
-                return true; // contains full term in description, but case insensitive
-            return false;
+            return Sets.newHashSet(rule.description.toLowerCase(Locale.ROOT).split("\\W+")).contains(lcSearch); // contains full term in description, but case insensitive
         }).sorted().collect(ImmutableList.toImmutableList());
     }
 

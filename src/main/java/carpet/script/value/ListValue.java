@@ -1,5 +1,6 @@
 package carpet.script.value;
 
+import carpet.script.LazyValue;
 import carpet.script.exception.InternalExpressionException;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.registry.Registry;
@@ -84,6 +85,12 @@ public class ListValue extends AbstractListValue implements ContainerValueInterf
     public static ListValue of(Value ... list)
     {
         return ListValue.wrap(Arrays.asList(list));
+    }
+
+    public static LazyValue lazyEmpty()
+    {
+        Value ret = new ListValue();
+        return (c, t) -> ret;
     }
 
     private ListValue()
@@ -246,7 +253,7 @@ public class ListValue extends AbstractListValue implements ContainerValueInterf
         return items;
     }
 
-    public Iterator<Value> iterator() { return new ArrayList<>(items).iterator(); }
+    public Iterator<Value> iterator() { return new ArrayList<>(items).iterator(); } // should be thread safe
 
     public void extend(List<Value> subList)
     {

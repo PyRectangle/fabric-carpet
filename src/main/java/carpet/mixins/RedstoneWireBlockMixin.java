@@ -1,6 +1,6 @@
 package carpet.mixins;
 
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import carpet.fakes.RedstoneWireBlockInterface;
 import carpet.helpers.RedstoneWireTurbo;
 import net.minecraft.block.Block;
@@ -36,10 +36,10 @@ public abstract class RedstoneWireBlockMixin implements RedstoneWireBlockInterfa
     private Set<BlockPos> affectedNeighbors;
 
     @Shadow
-    private int increasePower(int int_1, BlockState blockState_1) { return 0; };
+    private int increasePower(int int_1, BlockState blockState_1) { return 0; }
 
     @Shadow
-    private BlockState update(World world_1, BlockPos blockPos_1, BlockState blockState_1) { return null; };
+    private BlockState update(World world_1, BlockPos blockPos_1, BlockState blockState_1) { return null; }
 
     // =
 

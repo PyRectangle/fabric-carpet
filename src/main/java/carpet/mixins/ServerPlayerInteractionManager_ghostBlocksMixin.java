@@ -1,6 +1,6 @@
 package carpet.mixins;
 
-import carpet.settings.CarpetSettings;
+import carpet.CarpetSettings;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -47,7 +47,7 @@ public class ServerPlayerInteractionManager_ghostBlocksMixin
         return progress;
     }
 
-    @ModifyConstant(method = "method_14263",
+    @ModifyConstant(method = "method_14263", require = 0,
             constant = @Constant(doubleValue = 36D))
     private double addDistance(double original) {
         if (CarpetSettings.miningGhostBlockFix)

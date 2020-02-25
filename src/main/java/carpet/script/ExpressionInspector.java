@@ -1,6 +1,5 @@
 package carpet.script;
 
-import carpet.script.exception.ExpressionException;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.Collections;
@@ -21,32 +20,18 @@ public class ExpressionInspector
         return Expression.getExpressionSnippet(token, expr);
     }
 
-    public static String Expression_getName(Expression e)
+    public static String Expression_getModuleName(Expression e)
     {
-        return e.getName();
-    }
-
-    public static Expression Expression_cloneWithName(Expression e, String name, Tokenizer.Token token)
-    {
-        Expression copy = null;
-        try
-        {
-            copy = e.clone();
-        }
-        catch (CloneNotSupportedException ex)
-        {
-            throw new ExpressionException(e, token, "Problems in allocating global function "+name);
-        }
-        return copy.withName(name);
+        return e.module == null?null:e.module.getName();
     }
 
     private static TreeSet<String> scarpetFunctions;
     private static TreeSet<String> APIFunctions;
     static
     {
-        Set<String> allFunctions = (new CarpetExpression("null", null, null)).getExpr().getFunctionNames();
-        scarpetFunctions = new TreeSet<>(new Expression("null").getFunctionNames());
-        APIFunctions = new TreeSet<>(allFunctions.stream().filter(s -> !scarpetFunctions.contains(s)).collect(Collectors.toSet()));
+        Set<String> allFunctions = (new CarpetExpression(null, "null", null, null)).getExpr().getFunctionNames();
+        scarpetFunctions = new TreeSet<>(Expression.none.getFunctionNames());
+        APIFunctions = allFunctions.stream().filter(s -> !scarpetFunctions.contains(s)).collect(Collectors.toCollection(TreeSet::new));
     }
 
     public static List<String> suggestFunctions(ScriptHost host, String previous, String prefix)
@@ -63,10 +48,8 @@ public class ExpressionInspector
         // not that useful in commandline, more so in external scripts, so skipping here
         //scarpetMatches.addAll(CarpetServer.scriptServer.events.eventHandlers.keySet().stream().
         //        filter(s -> s.startsWith(prefix) && s.length() <= maxLen).map(s -> "__"+s+"(").collect(Collectors.toList()));
-        scarpetMatches.addAll(host.globalFunctions.keySet().stream().
-                filter(s -> s.startsWith(prefix)).map(s -> s+"(").collect(Collectors.toList()));
-        scarpetMatches.addAll(host.globalVariables.keySet().stream().
-                filter(s -> s.startsWith(prefix)).collect(Collectors.toList()));
+        scarpetMatches.addAll(host.globaFunctionNames(host.main, s -> s.startsWith(prefix)).map(s -> s+"(").collect(Collectors.toList()));
+        scarpetMatches.addAll(host.globaVariableNames(host.main, s -> s.startsWith(prefix)).collect(Collectors.toList()));
         return scarpetMatches;
     }
 }

@@ -2,31 +2,37 @@ package carpet.script;
 
 import carpet.CarpetServer;
 import carpet.fakes.MinecraftServerInterface;
+import carpet.fakes.StatTypeInterface;
 import carpet.helpers.FeatureGenerator;
 import carpet.mixins.ChunkTicketManager_scarpetMixin;
+import carpet.mixins.PointOfInterest_scarpetMixin;
 import carpet.mixins.ServerChunkManager_scarpetMixin;
 import carpet.script.Fluff.TriFunction;
+import carpet.script.bundled.Module;
 import carpet.script.exception.CarpetExpressionException;
 import carpet.script.exception.ExitStatement;
 import carpet.script.exception.ExpressionException;
 import carpet.script.exception.InternalExpressionException;
+import carpet.CarpetSettings;
 import carpet.script.value.BlockValue;
 import carpet.script.value.EntityValue;
 import carpet.script.value.FunctionValue;
 import carpet.script.value.LazyListValue;
 import carpet.script.value.ListValue;
+import carpet.script.value.MapValue;
 import carpet.script.value.NBTSerializableValue;
 import carpet.script.value.NullValue;
 import carpet.script.value.NumericValue;
 import carpet.script.value.StringValue;
+import carpet.script.value.ThreadValue;
 import carpet.script.value.Value;
-import carpet.settings.CarpetSettings;
 import carpet.utils.BlockInfo;
 import carpet.utils.Messenger;
 import com.google.common.collect.Sets;
 import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import it.unimi.dsi.fastutil.objects.ObjectSortedSet;
 import net.minecraft.block.BarrierBlock;
 import net.minecraft.block.BedrockBlock;
@@ -53,6 +59,7 @@ import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.BlockItem;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.nbt.CompoundTag;
@@ -67,18 +74,27 @@ import net.minecraft.server.world.ChunkTicket;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.BlockSoundGroup;
 import net.minecraft.sound.SoundCategory;
+import net.minecraft.stat.Stat;
+import net.minecraft.stat.StatType;
 import net.minecraft.state.StateFactory;
 import net.minecraft.state.property.Property;
+import net.minecraft.structure.StructurePiece;
+import net.minecraft.structure.StructureStart;
 import net.minecraft.text.LiteralText;
 import net.minecraft.util.Clearable;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.InvalidIdentifierException;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.EulerAngle;
+import net.minecraft.util.math.MutableIntBoundingBox;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.village.PointOfInterest;
+import net.minecraft.village.PointOfInterestStorage;
+import net.minecraft.village.PointOfInterestType;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.LightType;
 import net.minecraft.world.World;
@@ -87,6 +103,7 @@ import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 import net.minecraft.world.dimension.DimensionType;
+import net.minecraft.world.gen.ChunkRandom;
 import net.minecraft.world.loot.context.LootContext;
 import net.minecraft.world.loot.context.LootContextParameters;
 import org.apache.commons.lang3.tuple.Pair;
@@ -105,7 +122,6 @@ import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import static carpet.script.value.NBTSerializableValue.nameFromRegistryId;
 import static java.lang.Math.abs;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
@@ -126,23 +142,25 @@ import static java.lang.Math.sqrt;
  * players using <code>player('*')</code>, which only returns players in current dimension, or use
  * <code>in_dimension(expr)</code> function.</p>
  */
-public class CarpetExpression 
+public class CarpetExpression
 {
 
-    private ServerCommandSource source;
-    private BlockPos origin;
-    private Expression expr;
+    private final ServerCommandSource source;
+    private final BlockPos origin;
+    private final Expression expr;
     Expression getExpr() {return expr;}
     private static long tickStart = 0L;
 
     private static boolean stopAll = false;
+
+    private static final Map<String, Direction> DIRECTION_MAP = Arrays.stream(Direction.values()).collect(Collectors.toMap(Direction::getName, (direction) -> direction));
 
     /**
      * <h1><code>script stop/script resume</code> command</h1>
      * <div style="padding-left: 20px; border-radius: 5px 45px; border:1px solid grey;">
      * <p>
      * <code>/script stop</code> allows to stop execution of any script currently running that calls the
-     * <code>gametick()</code> function which
+     * <code>game_tick()</code> function which
      * allows the game loop to regain control of the game and process other commands. This will also make sure
      * that all current and future programs will stop their execution. Execution of all programs will be
      * prevented until <code>/script resume</code> command is called.
@@ -155,11 +173,11 @@ public class CarpetExpression
      * exponentially with <code>n</code>. It takes a little over 50 milliseconds to do fib(24), so above one tick,
      * but about a minute to do fib(40). Calling fib(40) will not only freeze the game, but also you woudn't be able to interrupt
      * its execution. We can modify the script as follows</p>
-     * <pre>fib(n) -&gt; ( gametick(50); if(n&lt;3, 1, fib(n-1)+fib(n-2) ) ); fib(40)</pre>
+     * <pre>fib(n) -&gt; ( game_tick(50); if(n&lt;3, 1, fib(n-1)+fib(n-2) ) ); fib(40)</pre>
      * <p>But this would never finish as such call would finish after <code>~ 2^40</code> ticks. To make our computations
      * responsive, yet able to respond to user interactions, other commands, as well as interrupt execution,
      * we could do the following:</p>
-     * <pre>fib(n) -&gt; ( if(n==23, gametick(50) ); if(n&lt;3, 1, fib(n-1)+fib(n-2) ) ); fib(40)</pre>
+     * <pre>fib(n) -&gt; ( if(n==23, game_tick(50) ); if(n&lt;3, 1, fib(n-1)+fib(n-2) ) ); fib(40)</pre>
      * <p>This would slow down the computation of fib(40) from a minute to two, but allows the game to keep continue running
      * and be responsive to commands, using about half of each tick to advance the computation.
      * Obviously depending on the problem, and available hardware, certain things can take
@@ -212,11 +230,13 @@ public class CarpetExpression
         Value v0 = params.get(0).evalValue(c);
         if (v0 instanceof BlockValue)
         {
-            Value retval = new StringValue(test.apply( ((BlockValue) v0).getBlockState(), ((BlockValue) v0).getPos()));
+            String strVal = test.apply( ((BlockValue) v0).getBlockState(), ((BlockValue) v0).getPos());
+            Value retval = strVal != null ? new StringValue(strVal) : Value.NULL;
             return (c_, t_) -> retval;
         }
         BlockValue block = BlockValue.fromParams(cc, params, 0).block;
-        Value retval = new StringValue(test.apply(block.getBlockState(), block.getPos()));
+        String strVal = test.apply(block.getBlockState(), block.getPos());
+        Value retval = strVal != null ? new StringValue(strVal) : Value.NULL;
         return (c_, t_) -> retval;
     }
 
@@ -266,7 +286,7 @@ public class CarpetExpression
         return bs;
     }
 
-    private static Map<String, ParticleEffect> particleCache = new HashMap<>();
+    private static final Map<String, ParticleEffect> particleCache = new HashMap<>();
     private ParticleEffect getParticleData(String name)
     {
         ParticleEffect particle = particleCache.get(name);
@@ -284,8 +304,54 @@ public class CarpetExpression
         return particle;
     }
 
+
+    private boolean isStraight(Vec3d from, Vec3d to, double density)
+    {
+        if ( (from.x == to.x && from.y == to.y) || (from.x == to.x && from.z == to.z) || (from.y == to.y && from.z == to.z))
+            return from.distanceTo(to) / density > 20;
+        return false;
+    }
+
+    private int drawOptimizedParticleLine(ServerWorld world, ParticleEffect particle, Vec3d from, Vec3d to, double density)
+    {
+        double distance = from.distanceTo(to);
+        int particles = (int)(distance/density);
+        Vec3d towards = to.subtract(from);
+        int parts = 0;
+        for (PlayerEntity player : world.getPlayers())
+        {
+            world.spawnParticles((ServerPlayerEntity)player, particle, true,
+                    (towards.x)/2+from.x, (towards.y)/2+from.y, (towards.z)/2+from.z, particles/3,
+                    towards.x/6, towards.y/6, towards.z/6, 0.0);
+            world.spawnParticles((ServerPlayerEntity)player, particle, true,
+                    from.x, from.y, from.z,1,0.0,0.0,0.0,0.0);
+            world.spawnParticles((ServerPlayerEntity)player, particle, true,
+                    to.x, to.y, to.z,1,0.0,0.0,0.0,0.0);
+            parts += particles/3+2;
+        }
+        int divider = 6;
+        while (particles/divider > 1)
+        {
+            int center = (divider*2)/3;
+            int dev = 2*divider;
+            for (PlayerEntity player : world.getPlayers())
+            {
+                world.spawnParticles((ServerPlayerEntity)player, particle, true,
+                        (towards.x)/center+from.x, (towards.y)/center+from.y, (towards.z)/center+from.z, particles/divider,
+                        towards.x/dev, towards.y/dev, towards.z/dev, 0.0);
+                world.spawnParticles((ServerPlayerEntity)player, particle, true,
+                        (towards.x)*(1.0-1.0/center)+from.x, (towards.y)*(1.0-1.0/center)+from.y, (towards.z)*(1.0-1.0/center)+from.z, particles/divider,
+                        towards.x/dev, towards.y/dev, towards.z/dev, 0.0);
+            }
+            parts += 2*particles/divider;
+            divider = 2*divider;
+        }
+        return parts;
+    }
+
     private int drawParticleLine(ServerWorld world, ParticleEffect particle, Vec3d from, Vec3d to, double density)
     {
+        if (isStraight(from, to, density)) return drawOptimizedParticleLine(world, particle, from, to, density);
         double lineLengthSq = from.squaredDistanceTo(to);
         if (lineLengthSq == 0) return 0;
         Vec3d incvec = to.subtract(from).multiply(2*density/sqrt(lineLengthSq));
@@ -433,8 +499,16 @@ public class CarpetExpression
      *     place_item('piston,x,y,z,'down') // places a piston facing down
      *     place_item('carrot',x,y,z) // attempts to plant a carrot plant. Returns true if could place carrots at that position.
      * </pre>
-     * <h3><code>biome(pos)</code></h3>
-     * <p>returns biome at that block position.</p>
+     * <h3><code>set_poi(pos, type, occupancy?)</code></h3>
+     * <p>Sets a Point of Interest (POI) of a specified type with optional custom occupancy. By default new POIs are not
+     * occupied. If type is <code>null</code>, POI at position is removed. In any case, previous POI is also removed.
+     * Available POI types are:</p>
+     * <ul>
+     *     <li><code>'unemployed', 'armorer', 'butcher', 'cartographer', 'cleric', 'farmer', 'fisherman', 'fletcher', 'leatherworker',
+     *     'librarian', 'mason', 'nitwit', 'shepherd', 'toolsmith', 'weaponsmith', 'home', 'meeting'</code></li>
+     * </ul>
+     * <p>Interestingly, <code>unemployed</code>, and <code>nitwit</code> are not used in the game, meaning, they could be used
+     * as permanent spatial markers for scarpet apps. <code>meeting</code> is the only one with increased max occupancy of 6.</p>
      * <h3><code>set_biome(pos, biome_name)</code></h3>
      * <p>changes biome at that block position.</p>
      * <h3><code>update(pos)</code></h3>
@@ -490,6 +564,22 @@ public class CarpetExpression
      * <pre>
      *     block_data(x,y,z) =&gt; '{TransferCooldown:0,x:450,y:68, ... }'
      * </pre>
+     * <h3><code>poi(pos), poi(pos, radius), poi(pos, radius, status)</code></h3>
+     * <p>Queries a POI (Point of Interest) at a given position, returning <code>null</code> if none is found, or tuple of
+     * poi type and its occupancy load. With optional <code>radius</code> and <code>status</code>, returns a list of POIs
+     * around <code>pos</code> within a given <code>radius</code>. If <code>status</code> is specified (either 'available',
+     * or 'occupied') returns only POIs with that status. The return format is again, poi type, occupancy load, and extra tripple of
+     * coordinates.</p>
+     * <p>Querying for POIs using the radius is intended use of POI mechanics and ability of accessing individual POIs via
+     * <code>poi(pos)</code> in only provided for completness.</p>
+     * <pre>
+     *     poi(x,y,z) =&gt; null  // nothing set at position
+     *     poi(x,y,z) =&gt; ['meeting',3]  // its a bell-type meeting point occupied by 3 villagers
+     *     poi(x,y,z,5) =&gt; []  // nothing around
+     *     poi(x,y,z,5) =&gt; [['nether_portal',0,[7,8,9]],['nether_portal',0,[7,9,9]]] // two portal blocks in the range
+     * </pre>
+     * <h3><code>biome(pos)</code></h3>
+     * <p>returns biome at that block position.</p>
      * <h3><code>solid(pos)</code></h3>
      * <p>Boolean function, true if the block is solid</p>
      * <h3> <code>air(pos)</code></h3>
@@ -519,6 +609,8 @@ public class CarpetExpression
      * <p>Numeric function, indicating hardness of a block.</p>
      * <h3><code>blast_resistance(pos)</code></h3>
      * <p>Numeric function, indicating blast_resistance of a block.</p>
+     * <h3><code>in_slime_chunk(pos)</code></h3>
+     * <p>Boolean indicating if the given block position is in a slime chunk.</p>
 
      * <h3><code>top(type, pos)</code></h3>
      * <p>Returns the Y value of the topmost block at given x, z coords (y value of a block is not important), according to the
@@ -535,7 +627,7 @@ public class CarpetExpression
      * top('ocean_floor', x, y, z)  =&gt; 41
      * </pre>
      * <h3><code>loaded(pos)</code></h3>
-     * <p>Boolean function, true if the block is accessible forthe game mechanics.
+     * <p>Boolean function, true if the block is accessible for the game mechanics.
      * Normally <code>scarpet</code> doesn't check if operates on
      * loaded area - the game will automatically load missing blocks. We see this as advantage.
      * Vanilla <code>fill/clone</code> commands only check the specified corners for loadness.</p>
@@ -557,6 +649,25 @@ public class CarpetExpression
      * but chunks can only be valid in a few states: <code>full</code>, <code>features</code>, <code>liquid_carvers</code>,
      * and <code>structure_starts</code>. Returns <code>null</code> if the chunk is not in memory unless called with optional
      * <code>true</code>.</p>
+     * <h3><code>structures(pos), structures(pos, structure_name)</code></h3>
+     * <p>Returns structure information for a given block position. Note that structure information is the same for
+     * all the blocks from the same chunk. <code>structures</code> function can be called with a block, or a block and
+     * a structure name. In the first case it returns a map of structures at a given position, keyed by structure name,
+     * with values indicating the bounding box of the structure - a pair of two 3-value coords (see examples). When
+     * called with an extra structure name, returns list of components for that structure, with their name, direction
+     * and two sets of coordinates indicating the bounding box of the structure piece.</p>
+     * <h3><code>structure_references(pos), structure_references(pos, structure_name)</code></h3>
+     * <p>Returns structure information that a chunk with a given block position is part of.
+     * <code>structure_references</code> function can be called with a block, or a block and
+     * a structure name. In the first case it returns a list of structure names that give chunk belongs to. When
+     * called with an extra structure name, returns list of positions pointing to the lowest block position in chunks that
+     * hold structure starts for these structures. You can query that chunk structures then to get its bounding boxes.</p>
+     * <h3><code>set_structure(pos, structure_name), set_structure(pos, structure_name, null)</code></h3>
+     * <p>Creates or removes structure information of a structure associated with a chunk of <code>pos</code>.
+     * Unlike <code>plop</code>, blocks are not placed in the world, only structure information is set. For the game this is a fully
+     * functional structure even if blocks are not set. To remove structure a given point is in,
+     * use <code>structure_references</code> to find where current structure starts.</p>
+
      * <h3><code>suffocates(pos)</code></h3>
      * <p>Boolean function, true if the block causes suffocation.</p>
      * <h3><code>power(pos)</code></h3>
@@ -715,6 +826,117 @@ public class CarpetExpression
             return (c_, t_) -> retval;
         });
 
+        // poi_get(pos, radius?, type?, occupation?)
+        this.expr.addLazyFunction("poi", -1, (c, t, lv) ->
+        {
+            CarpetContext cc = (CarpetContext) c;
+            if (lv.size() == 0) throw new InternalExpressionException("'poi' requires at least one parameter");
+            BlockValue.LocatorResult locator = BlockValue.fromParams(cc, lv, 0, false);
+            BlockPos pos = locator.block.getPos();
+            PointOfInterestStorage store = cc.s.getWorld().getPointOfInterestStorage();
+            if (lv.size() == locator.offset)
+            {
+                PointOfInterestType poiType = store.getType(pos).orElse(null);
+                if (poiType == null) return LazyValue.NULL;
+
+                // this feels wrong, but I don't want to mix-in more than I really need to.
+                // also distance adds 0.5 to each point which screws up accurate distance calculations
+                // you shoudn't be using POI with that in mind anyways, so I am not worried about it.
+                PointOfInterest poi = store.get(
+                        poiType.getCompletionCondition(),
+                        pos,
+                        1,
+                        PointOfInterestStorage.OccupationStatus.ANY
+                ).filter(p -> p.getPos().equals(pos)).findFirst().orElse(null);
+                if (poi == null)
+                    return LazyValue.NULL;
+                Value ret = ListValue.of(
+                        new StringValue(poi.getType().toString()),
+                        new NumericValue(poiType.getTicketCount() - ((PointOfInterest_scarpetMixin)poi).getFreeTickets())
+                );
+                return (_c, _t) -> ret;
+            }
+            long radius = NumericValue.asNumber(lv.get(locator.offset+0).evalValue(c)).getLong();
+            if (radius < 0) return ListValue.lazyEmpty();
+            Predicate<PointOfInterestType> condition = PointOfInterestType.ALWAYS_TRUE;
+            if (locator.offset + 1 < lv.size())
+            {
+                String poiType = lv.get(locator.offset+1).evalValue(c).getString().toLowerCase(Locale.ROOT);
+                if (!"any".equals(poiType))
+                {
+                    PointOfInterestType type =  Registry.POINT_OF_INTEREST_TYPE.get(new Identifier(poiType));
+                    if (type == PointOfInterestType.UNEMPLOYED && !"unemployed".equals(poiType)) return LazyValue.NULL;
+                    condition = (tt) -> tt == type;
+                }
+            }
+            PointOfInterestStorage.OccupationStatus status = PointOfInterestStorage.OccupationStatus.ANY;
+            if (locator.offset + 2 < lv.size())
+            {
+                String statusString = lv.get(locator.offset+2).evalValue(c).getString().toLowerCase(Locale.ROOT);
+                if ("occupied".equals(statusString))
+                    status = PointOfInterestStorage.OccupationStatus.IS_OCCUPIED;
+                else if ("available".equals(statusString))
+                    status = PointOfInterestStorage.OccupationStatus.HAS_SPACE;
+                else
+                    return LazyValue.NULL;
+            }
+
+            Value ret = ListValue.wrap(store.get(condition, pos, (int)radius, status).map( p ->
+                    ListValue.of(
+                            new StringValue(p.getType().toString()),
+                            new NumericValue(p.getType().getTicketCount() - ((PointOfInterest_scarpetMixin)p).getFreeTickets()),
+                            ListValue.of(new NumericValue(p.getPos().getX()), new NumericValue(p.getPos().getY()), new NumericValue(p.getPos().getZ()))
+                    )
+            ).collect(Collectors.toList()));
+
+            return (c_, t_) -> ret;
+        });
+
+        //poi_set(pos, null) poi_set(pos, type, occupied?,
+        this.expr.addLazyFunction("set_poi", -1, (c, t, lv) ->
+        {
+            CarpetContext cc = (CarpetContext) c;
+            if (lv.size() == 0) throw new InternalExpressionException("'set_poi' requires at least one parameter");
+            BlockValue.LocatorResult locator = BlockValue.fromParams(cc, lv, 0, false);
+            BlockPos pos = locator.block.getPos();
+            if (lv.size() < locator.offset) throw new InternalExpressionException("'set_poi' requires the new poi type or null, after position argument");
+            Value poi = lv.get(locator.offset+0).evalValue(c);
+            PointOfInterestStorage store = cc.s.getWorld().getPointOfInterestStorage();
+            if (poi == Value.NULL)
+            {   // clear poi information
+                if (store.getType(pos).isPresent())
+                {
+                    store.remove(pos);
+                    return LazyValue.TRUE;
+                }
+                return LazyValue.FALSE;
+            }
+            String poiTypeString = poi.getString().toLowerCase(Locale.ROOT);
+            PointOfInterestType type =  Registry.POINT_OF_INTEREST_TYPE.get(new Identifier(poiTypeString));
+            // solving lack of null with defaulted registries
+            if (type == PointOfInterestType.UNEMPLOYED && !"unemployed".equals(poiTypeString)) throw new InternalExpressionException("Unknown POI type: "+poiTypeString);
+            int occupancy = 0;
+            if (locator.offset + 1 < lv.size())
+            {
+                occupancy = (int)NumericValue.asNumber(lv.get(locator.offset + 1).evalValue(c)).getLong();
+                if (occupancy < 0) throw new InternalExpressionException("Occupancy cannot be negative");
+            }
+            if (store.getType(pos).isPresent()) store.remove(pos);
+            store.add(pos, type);
+            // setting occupancy for a
+            // again - don't want to mix in unnecessarily - peeps not gonna use it that often so not worries about it.
+            if (occupancy > 0)
+            {
+                int finalO = occupancy;
+                store.get((tt) -> tt==type, pos, 1, PointOfInterestStorage.OccupationStatus.ANY
+                ).filter(p -> p.getPos().equals(pos)).findFirst().ifPresent(p -> {
+                    for (int i=0; i < finalO; i++) ((PointOfInterest_scarpetMixin)p).callReserveTicket();
+                });
+            }
+            return LazyValue.TRUE;
+        });
+
+
         this.expr.addLazyFunction("pos", 1, (c, t, lv) ->
         {
             Value arg = lv.get(0).evalValue(c);
@@ -747,7 +969,7 @@ public class CarpetExpression
             if (lv.size() <= locator.offset)
                 throw new InternalExpressionException("'pos_offset' needs at least position, and direction");
             String directionString = lv.get(locator.offset).evalValue(c).getString();
-            Direction dir = Direction.byName(directionString);
+            Direction dir = DIRECTION_MAP.get(directionString);
             if (dir == null)
                 throw new InternalExpressionException("Unknown direction: "+directionString);
             int howMuch = 1;
@@ -768,7 +990,7 @@ public class CarpetExpression
                 booleanStateTest(c, "liquid", lv, (s, p) -> !s.getFluidState().isEmpty()));
 
         this.expr.addLazyFunction("flammable", -1, (c, t, lv) ->
-                booleanStateTest(c, "flammable", lv, (s, p) -> !s.getMaterial().isBurnable()));
+                booleanStateTest(c, "flammable", lv, (s, p) -> s.getMaterial().isBurnable()));
 
         this.expr.addLazyFunction("transparent", -1, (c, t, lv) ->
                 booleanStateTest(c, "transparent", lv, (s, p) -> !s.getMaterial().isSolid()));
@@ -799,6 +1021,19 @@ public class CarpetExpression
 
         this.expr.addLazyFunction("blast_resistance", -1, (c, t, lv) ->
                 genericStateTest(c, "blast_resistance", lv, (s, p, w) -> new NumericValue(s.getBlock().getBlastResistance())));
+
+        this.expr.addLazyFunction("in_slime_chunk", -1, (c, t, lv) ->
+        {
+            BlockPos pos = BlockValue.fromParams((CarpetContext)c, lv, 0).block.getPos();
+            ChunkPos chunkPos = new ChunkPos(pos);
+            Value ret = new NumericValue(ChunkRandom.create(
+                    chunkPos.x, chunkPos.z,
+                    ((CarpetContext)c).s.getWorld().getSeed(),
+                    987234911L
+            ).nextInt(10) == 0);
+            return (_c, _t) -> ret;
+        });
+
 
         this.expr.addLazyFunction("top", -1, (c, t, lv) ->
         {
@@ -967,27 +1202,29 @@ public class CarpetExpression
 
             if (sourceBlockState == targetBlockState && data == null)
                 return (c_, t_) -> Value.FALSE;
-            CarpetSettings.impendingFillSkipUpdates = !CarpetSettings.fillUpdates;
+            BlockState finalSourceBlockState = sourceBlockState;
             BlockPos targetPos = targetLocator.block.getPos();
-            Clearable.clear(world.getBlockEntity(targetPos));
-            world.setBlockState(targetPos, sourceBlockState, 2);
-
-            if ( data != null)
+            cc.s.getMinecraftServer().executeSync( () ->
             {
-                BlockEntity be = world.getBlockEntity(targetPos);
-                if (be != null)
+                CarpetSettings.impendingFillSkipUpdates = !CarpetSettings.fillUpdates;
+                Clearable.clear(world.getBlockEntity(targetPos));
+                world.setBlockState(targetPos, finalSourceBlockState, 2);
+                if (data != null)
                 {
-                    CompoundTag destTag = data.method_10553();
-                    destTag.putInt("x", targetPos.getX());
-                    destTag.putInt("y", targetPos.getY());
-                    destTag.putInt("z", targetPos.getZ());
-                    be.fromTag(destTag);
-                    be.markDirty();
+                    BlockEntity be = world.getBlockEntity(targetPos);
+                    if (be != null)
+                    {
+                        CompoundTag destTag = data.method_10553();
+                        destTag.putInt("x", targetPos.getX());
+                        destTag.putInt("y", targetPos.getY());
+                        destTag.putInt("z", targetPos.getZ());
+                        be.fromTag(destTag);
+                        be.markDirty();
+                    }
                 }
-            }
-
-            CarpetSettings.impendingFillSkipUpdates = false;
-            Value retval = new BlockValue(sourceBlockState, world, targetLocator.block.getPos());
+                CarpetSettings.impendingFillSkipUpdates = false;
+            });
+            Value retval = new BlockValue(finalSourceBlockState, world, targetLocator.block.getPos());
             return (c_, t_) -> retval;
         });
 
@@ -1004,16 +1241,40 @@ public class CarpetExpression
             long how = 0;
             if (lv.size() > locator.offset)
                 how = NumericValue.asNumber(lv.get(locator.offset).evalValue(cc)).getLong();
+            Item item = Items.DIAMOND_PICKAXE;
+            if (lv.size() > locator.offset+1)
+            {
+                String itemString = lv.get(locator.offset+1).evalValue(c).getString();
+                item = Registry.ITEM.get(new Identifier(itemString));
+                if (item == Items.AIR && !itemString.equals("air")) throw new InternalExpressionException("Incorrect item: "+itemString);
+            }
+            CompoundTag tag = null;
+            if (lv.size() > locator.offset+2)
+            {
+                Value tagValue = lv.get(locator.offset+2).evalValue(c);
+                if (tagValue instanceof NBTSerializableValue)
+                    tag = ((NBTSerializableValue) tagValue).getCompoundTag();
+                else
+                    tag = NBTSerializableValue.parseString(tagValue.getString()).getCompoundTag();
+            }
             world.clearBlockState(where, false);
             world.playLevelEvent(null, 2001, where, Block.getRawIdFromState(state));
+            // WIP tool still mines everything, and only enchantments count.
+            // need to verify the durability changes
+
             if (how < 0)
             {
                 Block.dropStack(world, where, new ItemStack(state.getBlock()));
             }
             else
             {
-                ItemStack tool = new ItemStack(Items.DIAMOND_PICKAXE, 1);
-                tool.addEnchantment(Enchantments.FORTUNE,(int)how);
+                ItemStack tool = new ItemStack(item, 1);
+                if (tag != null)
+                    tool.setTag(tag);
+                if (how > 0)
+                    tool.addEnchantment(Enchantments.FORTUNE,(int)how);
+                else if (how < 0)
+                    tool.addEnchantment(Enchantments.SILK_TOUCH, 1);
 
                 LootContext.Builder lootContext$Builder_1 = (new LootContext.Builder(world)).
                         setRandom(world.random).
@@ -1168,8 +1429,127 @@ public class CarpetExpression
             this.forceChunkUpdate(pos, world);
             return LazyValue.NULL;
         });
-        // need get_biome
 
+        this.expr.addLazyFunction("structure_references", -1, (c, t, lv) -> {
+            CarpetContext cc = (CarpetContext)c;
+            BlockValue.LocatorResult locator = BlockValue.fromParams(cc, lv, 0);
+            ServerWorld world = cc.s.getWorld();
+            BlockPos pos = locator.block.getPos();
+            Map<String, LongSet> references = world.getChunk(pos).getStructureReferences();
+            if (lv.size() == locator.offset)
+            {
+                List<Value> referenceList = references.entrySet().stream().
+                        filter(e -> e.getValue()!= null && !e.getValue().isEmpty()).
+                        map(e -> new StringValue(FeatureGenerator.structureToFeature.get(e.getKey()).get(0))).collect(Collectors.toList());
+                return (_c, _t ) -> ListValue.wrap(referenceList);
+            }
+            String simpleStructureName = lv.get(locator.offset).evalValue(c).getString().toLowerCase(Locale.ROOT);
+            String structureName = FeatureGenerator.featureToStructure.get(simpleStructureName);
+            if (structureName == null) return LazyValue.NULL;
+            LongSet structureReferences = references.get(structureName);
+            if (structureReferences == null || structureReferences.isEmpty()) return ListValue.lazyEmpty();
+            Value ret = ListValue.wrap(structureReferences.stream().map(l -> ListValue.of(
+                    new NumericValue(16*ChunkPos.getPackedX(l)),
+                    Value.ZERO,
+                    new NumericValue(16*ChunkPos.getPackedZ(l)))).collect(Collectors.toList()));
+            return (_c, _t) -> ret;
+        });
+
+        this.expr.addLazyFunction("structures", -1, (c, t, lv) -> {
+            CarpetContext cc = (CarpetContext)c;
+            BlockValue.LocatorResult locator = BlockValue.fromParams(cc, lv, 0);
+
+            ServerWorld world = cc.s.getWorld();
+            BlockPos pos = locator.block.getPos();
+            Map<String, StructureStart> structures = world.getChunk(pos).getStructureStarts();
+            if (lv.size() == locator.offset)
+            {
+                Map<Value, Value> structureList = new HashMap<>();
+                for (Map.Entry<String, StructureStart> entry : structures.entrySet())
+                {
+                    StructureStart start = entry.getValue();
+                    if (start == StructureStart.DEFAULT)
+                        continue;
+                    MutableIntBoundingBox box = start.getBoundingBox();
+                    ListValue coord1 = ListValue.of(new NumericValue(box.minX), new NumericValue(box.minY), new NumericValue(box.minZ));
+                    ListValue coord2 = ListValue.of(new NumericValue(box.maxX), new NumericValue(box.maxY), new NumericValue(box.maxZ));
+                    structureList.put(new StringValue(FeatureGenerator.structureToFeature.get(entry.getKey()).get(0)), ListValue.of(coord1, coord2));
+                }
+                Value ret = MapValue.wrap(structureList);
+                return (_c, _t) -> ret;
+            }
+            String structureName = lv.get(locator.offset).evalValue(c).getString().toLowerCase(Locale.ROOT);
+            StructureStart start = structures.get(FeatureGenerator.featureToStructure.get(structureName));
+            if (start == null || start == StructureStart.DEFAULT) return LazyValue.NULL;
+            List<Value> pieces = new ArrayList<>();
+            for (StructurePiece piece : start.getChildren())
+            {
+                MutableIntBoundingBox box = piece.getBoundingBox();
+                pieces.add(ListValue.of(
+                        new StringValue( NBTSerializableValue.nameFromRegistryId(Registry.STRUCTURE_PIECE.getId(piece.getType()))),
+                        (piece.getFacing()== null)?Value.NULL: new StringValue(piece.getFacing().getName()),
+                        ListValue.of(new NumericValue(box.minX), new NumericValue(box.minY), new NumericValue(box.minZ)),
+                        ListValue.of(new NumericValue(box.maxX), new NumericValue(box.maxY), new NumericValue(box.maxZ))
+                ));
+            }
+            Value ret = ListValue.wrap(pieces);
+            return (_c, _t) -> ret;
+        });
+
+        this.expr.addLazyFunction("set_structure", -1, (c, t, lv) ->
+        {
+            CarpetContext cc = (CarpetContext)c;
+            BlockValue.LocatorResult locator = BlockValue.fromParams(cc, lv, 0);
+
+            ServerWorld world = cc.s.getWorld();
+            BlockPos pos = locator.block.getPos();
+
+            if (lv.size() == locator.offset)
+                throw new InternalExpressionException("'set_structure requires at least position and a structure name");
+            String structureName = lv.get(locator.offset).evalValue(c).getString().toLowerCase(Locale.ROOT);
+            String structureId = FeatureGenerator.featureToStructure.get(structureName);
+            if (structureId == null) throw new InternalExpressionException("Unknown structure: "+structureName);
+            // good 'ol pointer
+            Value[] result = new Value[]{Value.NULL};
+            // technically a world modification. Even if we could let it slide, we will still park it
+            ((CarpetContext) c).s.getMinecraftServer().executeSync(() ->
+            {
+                Map<String, StructureStart> structures = world.getChunk(pos).getStructureStarts();
+                if (lv.size() == locator.offset + 1)
+                {
+                    Boolean res = FeatureGenerator.gridStructure(structureName, ((CarpetContext) c).s.getWorld(), locator.block.getPos());
+                    if (res == null) return;
+                    result[0] = res?Value.TRUE:Value.FALSE;
+                    return;
+                }
+                Value newValue = lv.get(locator.offset+1).evalValue(c);
+                if (newValue instanceof NullValue) // remove structure
+                {
+                    if (!structures.containsKey(structureId))
+                    {
+                        return;
+                    }
+                    StructureStart start = structures.get(structureId);
+                    ChunkPos structureChunkPos = new ChunkPos(start.getChunkX(), start.getChunkZ());
+                    MutableIntBoundingBox box = start.getBoundingBox();
+                    for (int chx = box.minX / 16; chx <= box.maxX / 16; chx++)
+                    {
+                        for (int chz = box.minZ / 16; chz <= box.maxZ / 16; chz++)
+                        {
+                            ChunkPos chpos = new ChunkPos(chx, chz);
+                            // getting a chunk will convert it to full, allowing to modify references
+                            Map<String, LongSet> references = world.getChunk(chpos.getCenterBlockPos()).getStructureReferences();
+                            if (references.containsKey(structureId) && references.get(structureId) != null)
+                                references.get(structureId).remove(structureChunkPos.toLong());
+                        }
+                    }
+                    structures.remove(structureId);
+                    result[0] = Value.TRUE;
+                }
+            });
+            Value ret = result[0]; // preventing from lazy evaluating of the result in case a future completes later
+            return (_c, _t) -> ret;
+        });
     }
 
     /**
@@ -1177,7 +1557,8 @@ public class CarpetExpression
      * <div style="padding-left: 20px; border-radius: 5px 45px; border:1px solid grey;">
      * <h2>Manipulating inventories of blocks and entities</h2>
      * <p>Most functions in this category require inventory as the first argument. Inventory could be specified by
-     * an entity, or a block, or position (three coordinates) of a potential block with inventory.
+     * an entity, or a block, or position (three coordinates) of a potential block with inventory. Player enderchest inventory
+     * require two arguments, keyword <code>'enderchest'</code>, followed by the player entity argument.
      * If the entity or a block doesn't
      * have an inventory, they typically do nothing and return null.</p>
      * <p>Most items returned are in the form of
@@ -1205,6 +1586,7 @@ public class CarpetExpression
      * don't have an inventory</p>
      * <pre>
      *     inventory_size(player()) =&gt; 41
+     *     inventory_size('enderchest', player()) =&gt; 27 // enderchest
      *     inventory_size(x,y,z) =&gt; 27 // chest
      *     inventory_size(block(pos)) =&gt; 5 // hopper
      * </pre>
@@ -1528,7 +1910,7 @@ public class CarpetExpression
     }
     private void syncPlayerInventory(NBTSerializableValue.InventoryLocator inventory, int int_1)
     {
-        if (inventory.owner instanceof ServerPlayerEntity)
+        if (inventory.owner instanceof ServerPlayerEntity && !inventory.isEnder)
         {
             ServerPlayerEntity player = (ServerPlayerEntity) inventory.owner;
             player.networkHandler.sendPacket(new GuiSlotUpdateS2CPacket(
@@ -1665,6 +2047,8 @@ public class CarpetExpression
      * <p>Eye height of the entity.</p>
      * <h3><code>query(e,'age')</code></h3>
      * <p>Age, in ticks, of the entity, i.e. how long it existed.</p>
+     * <h3><code>query(e,'breeding_age')</code></h3>
+     * <p>Breeding age of passive entity, in ticks. If negative it it time to adulthood, if positive, breeding cooldown</p>
      * <h3><code>query(e,'despawn_timer')</code></h3>
      * <p>For living entities - the number of ticks they fall outside of immediate player presence.</p>
      * <h3><code>query(e,'item')</code></h3>
@@ -1691,6 +2075,9 @@ public class CarpetExpression
      * <p>String with gamemode, or <code>null</code> if not a player.</p>
      * <h3><code>query(e,'gamemode_id')</code></h3>
      * <p>Good'ol gamemode id, or null if not a player.</p>
+     * <h3><code>query(e,'permission_level')</code></h3>
+     * <p>Player's permission level, or <code>null</code> if not applicable for this entity.</p>
+     *
      * <h3><code>query(e,'effect',name?)</code></h3>
      * <p>Without extra arguments, it returns list of effect active on a living entity.
      * Each entry is a triple of short effect name, amplifier, and remaining duration.
@@ -1724,11 +2111,12 @@ public class CarpetExpression
      * <h3><code>query(e,'trace', reach?, options?...)</code></h3>
      * <p>Returns the result of ray tracing from entity perspective, indicating what it is looking at. Default reach is 4.5
      * blocks (5 for creative players), and by default it traces for blocks and entities, identical to player attack tracing action.
-     * This can be customized with <code>options</code>, use 'blocks' to trace for blocks only, 'liquids' to include liquid blocks
-     * as possible results, and 'entities' to trace entities as well.</p>
+     * This can be customized with <code>options</code>, use 'blocks' to trace for blocks, 'liquids' to include liquid blocks
+     * as possible results, and 'entities' to trace entities. Any combination of the above is possible. When tracing
+     * entities and blocks, blocks will take over the priority even if transparent or non-colliding (aka fighting chickens
+     * in tall grass).</p>
      * <p>Regardless of the options selected, the result could be <code>null</code> if nothing is in reach, entity, if look
-     * targets an antity, and block value if block is in reach. Tracing always hits blocks. Even if an entity tracing is requested
-     * and there is a block in the way - the block will be returned.</p>
+     * targets an entity, and block value if block is in reach.</p>
      * <h3><code>query(e,'nbt',path?)</code></h3>
      * <p>Returns full NBT of the entity. If path is specified, it fetches only that portion of the NBT,
      * that corresponds to the path. For specification of <code>path</code> attribute, consult
@@ -1763,7 +2151,7 @@ public class CarpetExpression
      * <p>Adds a vector to the motion vector. Most realistic way to apply a force to an entity.</p>
      * <h3><code>modify(e, 'custom_name'), modify(e, 'custom_name', name )</code></h3>
      * <h3><code>modify(e, 'pickup_delay')</code></h3>
-     * <p>Sets a custom pickup delay if the entity argument is an item entity</p>
+     * <h3><code>modify(e, 'breeding_age')</code></h3>
      * <h3><code>modify(e, 'despawn_timer')</code></h3>
      * <p>Sets a custom despawn timer value.</p>
      * <h3><code>modify(e, 'dismount')</code></h3>
@@ -1782,6 +2170,12 @@ public class CarpetExpression
      * <p>Make noises.</p>
      * <h3><code>modify(e, 'ai', boolean)</code></h3>
      * <p>If called with <code>false</code> value, it will disable AI in the mob. <code>true</code> will enable it again.</p>
+     * <h3><code>modify(e, 'no_clip', boolean)</code></h3>
+     * <p>Sets if the entity obeys any collisions, including collisions with the terrain and basic physics.
+     * Not affecting players, since they are controlled client side</p>
+     * <h3><code>modify(e, 'effect', name, duration?, amplifier?, show_particles?, show_icon?)</code></h3>
+     * <p>Applies status effect to the living entity. Takes several optional parameters, which default to <code>0</code>,
+     * <code>true</code> and <code>true</code>. If no duration is specified, or it is null or 0, the effect is removed.</p>
      * <h3><code>modify(e, 'home', null), modify(e, 'home', block, distance?), modify(e, 'home', x, y, z, distance?)</code></h3>
      * <p>Sets AI to stay around the home position, within <code>distance</code> blocks from it. <code>distance</code>
      * defaults to 16 blocks. <code>null</code> removes it. <i>May</i> not work fully with mobs that have this AI built in, like
@@ -1921,7 +2315,9 @@ public class CarpetExpression
             boolean hasTag = false;
             if (lv.size() > position.offset)
             {
-                NBTSerializableValue v = NBTSerializableValue.parseString(lv.get(position.offset).evalValue(c).getString());
+                Value nbt = lv.get(position.offset).evalValue(c);
+                NBTSerializableValue v = (nbt instanceof NBTSerializableValue) ? (NBTSerializableValue) nbt
+                        : NBTSerializableValue.parseString(nbt.getString());
                 if (v != null)
                 {
                     hasTag = true;
@@ -2070,9 +2466,7 @@ public class CarpetExpression
             else if (!(functionValue instanceof FunctionValue))
             {
                 String name = functionValue.getString();
-                functionValue = c.host.globalFunctions.get(name);
-                if (functionValue == null)
-                    throw new InternalExpressionException("Function "+name+" is not defined yet");
+                functionValue = c.host.getAssertFunction(this.expr.module, name);
             }
             FunctionValue function = (FunctionValue)functionValue;
             List<Value> args = null;
@@ -2080,7 +2474,7 @@ public class CarpetExpression
                 args = Collections.singletonList(lv.get(3).evalValue(c));
             else if (lv.size()>4)
             {
-                args = new ArrayList<>(lv.subList(3, lv.size()).stream().map((vv) -> vv.evalValue(c)).collect(Collectors.toList()));
+                args = lv.subList(3, lv.size()).stream().map((vv) -> vv.evalValue(c)).collect(Collectors.toList());
             }
 
             ((EntityValue) v).setEvent((CarpetContext)c, what, function, args);
@@ -2312,12 +2706,12 @@ public class CarpetExpression
             CarpetContext cc = (CarpetContext)c;
             return (c_, t_) -> new LazyListValue()
             {
-                int minx = cx-sminx;
-                int miny = cy-sminy;
-                int minz = cz-sminz;
-                int maxx = cx+smaxx;
-                int maxy = cy+smaxy;
-                int maxz = cz+smaxz;
+                final int minx = cx-sminx;
+                final int miny = cy-sminy;
+                final int minz = cz-sminz;
+                final int maxx = cx+smaxx;
+                final int maxy = cy+smaxy;
+                final int maxz = cz+smaxz;
                 int x;
                 int y;
                 int z;
@@ -2579,14 +2973,18 @@ public class CarpetExpression
      * <h3><code>logger(expr)</code></h3>
      * <p>Prints the message to system logs, and not to chat.</p>
      * <h3><code>run(expr)</code></h3>
-     * <p>Runs a command from the string result of the <code>expr</code> expression, and returns its success count</p>
+     * <p>Runs a vanilla command from the string result of the <code>expr</code> and returns its success count</p>
+     * <pre>
+     * run('fill 1 1 1 10 10 10 air') -&gt; 123 // 123 block were filled, this operation was successful 123 times out of a possible 1000 blocks volume
+     * run('give @s stone 4') -&gt; 1 // this operation was successful once
+     * </pre>
      * <h3><code>save()</code></h3>
      * <p>Performs autosave, saves all chunks, player data, etc. Useful for programs where autosave is disabled
      * due to performance reasons and saves the world only on demand.</p>
      * <h3><code>load_app_data(), load_app_data(file)</code></h3>
      * <p>Loads the app data associated with the app from the world /scripts folder. Without argument returns the memory
      * managed and buffered / throttled NBT tag. With a file name - reads explicitly a file with that name from the scripts
-     * floder.</p>
+     * folder.</p>
      * <p> You can use app data to save non-vanilla information separately from the world and other scripts.</p>
      * <h3><code>store_app_data(tag), store_app_data(tag, file)</code></h3>
      * <p>Stores the app data associated with the app from the world /scripts folder. With the <code>file</code> parameter
@@ -2599,9 +2997,11 @@ public class CarpetExpression
      * accept expected tick length, in milliseconds. You can't use it to permanently change the game speed, but
      * setting longer commands with custom tick speeds can be interrupted via <code>/script stop</code> command</p>
      * <pre>
-     * loop(1000,tick())  // runs the game as fast as it can for 1000 ticks
-     * loop(1000,tick(100)) // runs the game twice as slow for 1000 ticks
+     * loop(1000,game_tick())  // runs the game as fast as it can for 1000 ticks
+     * loop(1000,game_tick(100)) // runs the game twice as slow for 1000 ticks
      * </pre>
+     * <h3><code>seed()</code></h3>
+     * <p>Returns current world seed.</p>
      * <h3><code>current_dimension()</code></h3>
      * <p>Returns current dimension that the script runs in.</p>
      * <h3><code>in_dimension(smth, expr)</code></h3>
@@ -2611,17 +3011,37 @@ public class CarpetExpression
      * <h3><code>schedule(delay, function, args...)</code></h3>
      * <p>Schedules a user defined function to run with a specified <code>delay</code> ticks of delay.
      * Scheduled functions run at the end of the tick, and they will run in order they were scheduled.</p>
+     * <h3><code>statistic(player, category, entry)</code></h3>
+     * <p>Queries in-game statistics for certain values. Categories include:</p>
+     * <ul>
+     *     <li><code>mined</code>: blocks mined</li>
+     *     <li><code>crafted</code>: items crafted</li>
+     *     <li><code>used</code>: items used</li>
+     *     <li><code>broken</code>: items broken</li>
+     *     <li><code>picked_up</code>: items picked up</li>
+     *     <li><code>dropped</code>: items dropped</li>
+     *     <li><code>killed</code>: mobs killed</li>
+     *     <li><code>killed_by</code>: blocks mined</li>
+     *     <li><code>custom</code>: various random stats</li>
+     * </ul>
+     * <p>For the options of <code>entry</code>, consult your statistics page, or give it a guess.</p>
+     * <p>The call will return <code>null</code> if the statistics options are incorrect, or player didn't get these
+     * in their history. If the player encountered the statistic, or game created for him empty one, it will
+     * return a number. Scarpet will not affect the entries of the statistics, even if it is just creating empty ones.
+     * With <code>null</code> response it could either mean your input is wrong, or statistic has effectively
+     * a value of <code>0</code>.</p>
      * <h3><code>plop(pos, what)</code></h3>
      * <p>Plops a structure or a feature at a given <code>pos</code>, so block, triple position coordinates
      * or a list of coordinates. To <code>what</code> gets plopped and exactly where it often depends on the
      * feature or structure itself. For example, all structures are chunk aligned, and often span multiple chunks.
-     * Repeated calls to plop a structure in the same chunk would result either in the same strucuture generated on
+     * Repeated calls to plop a structure in the same chunk would result either in the same structure generated on
      * top of each other, or with different state, but same position. Most
      * structures generate at specific altitudes, which are hardcoded, or with certain blocks around them. API will cancel
      * all extra position / biome / random requirements for structure / feature placement, but some hardcoded limitations
-     * may still cause some of strucutures/features not to place. Some features require special blocks to be present, like
+     * may still cause some of structures/features not to place. Some features require special blocks to be present, like
      * coral -&gt; water or ice spikes -&gt; snow block, and for some features, like fossils, placement is all sorts of
-     * messed up.</p>
+     * messed up. This can be partially avoided for structures by setting their structure information via <code>set_structure</code>
+     * which sets it without looking into world blocks, and then use <code>plop</code> to fill it with blocks. This may, or may not work</p>
      * <p>
      * All generated structures will retain their properties, like mob spawning, however in many cases the world / dimension
      * itself has certain rules to spawn mobs, like plopping a nether fortress in the overworld will not spawn nether mobs
@@ -2641,39 +3061,49 @@ public class CarpetExpression
      *     <li><code>igloo</code>: Igloo</li>
      *     <li><code>shipwreck</code>: Shipwreck, version1?</li>
      *     <li><code>shipwreck2</code>: Shipwreck, version2?</li>
-     *     <li><code>witchhut</code></li>
-     *     <li><code>oceanruin, oceanruin_small, oceanruin_tall</code>: Stone variants of ocean ruins.</li>
-     *     <li><code>oceanruin_warm, oceanruin_warm_small, oceanruin_warm_tall</code>: Sandstone variants of ocean ruins.</li>
+     *     <li><code>witch_hut</code></li>
+     *     <li><code>ocean_ruin, ocean_ruin_small, ocean_ruin_tall</code>: Stone variants of ocean ruins.</li>
+     *     <li><code>ocean_ruin_warm, ocean_ruin_warm_small, ocean_ruin_warm_tall</code>: Sandstone variants of ocean ruins.</li>
      *     <li><code>treasure</code>: A treasure chest. Yes, its a whole structure.</li>
+     *     <li><code>pillager_outpost</code>: A pillager outpost.</li>
      *     <li><code>mineshaft</code>: A mineshaft.</li>
      *     <li><code>mineshaft_mesa</code>: A Mesa (Badlands) version of a mineshaft.</li>
      *     <li><code>village</code>: Plains, oak village.</li>
      *     <li><code>village_desert</code>: Desert, sandstone village.</li>
      *     <li><code>village_savanna</code>: Savanna, acacia village.</li>
      *     <li><code>village_taiga</code>: Taiga, spruce village.</li>
+     *     <li><code>village_snowy</code>: Resolute, Canada.</li>
      * </ul>
      * <p>Feature list:</p>
      * <ul>
      *     <li><code>oak</code></li>
+     *     <li><code>oak_beehive</code>: oak with a hive (1.15+).</li>
      *     <li><code>oak_large</code>: oak with branches.</li>
+     *     <li><code>oak_large_beehive</code>: oak with branches and a beehive (1.15+).</li>
      *     <li><code>birch</code></li>
      *     <li><code>birch_large</code>: tall variant of birch tree.</li>
      *     <li><code>shrub</code>: low bushes that grow in jungles.</li>
-     *     <li><code>shrub_acacia</code>: low bush but configured with acacia</li>
-     *     <li><code>shrub_snowy</code>: low bush with white blocks</li>
+     *     <li><code>shrub_acacia</code>: low bush but configured with acacia (1.14 only)</li>
+     *     <li><code>shrub_snowy</code>: low bush with white blocks (1.14 only)</li>
      *     <li><code>jungle</code>: a tree</li>
-     *     <li><code>spruce_matchstick</code>: tall spruce with minimal leafage.</li>
+     *     <li><code>jungle_large</code>: 2x2 jungle tree</li>
+     *     <li><code>spruce</code></li>
+     *     <li><code>spruce_large</code>: 2x2 spruce tree</li>
+     *     <li><code>pine</code>: spruce with minimal leafage (1.15+)</li>
+     *     <li><code>pine_large</code>: 2x2 spruce with minimal leafage (1.15+)</li>
+     *     <li><code>spruce_matchstick</code>: see 1.15 pine (1.14 only).</li>
+     *     <li><code>spruce_matchstick_large</code>: see 1.15 pine_large (1.14 only).</li>
      *     <li><code>dark_oak</code></li>
      *     <li><code>acacia</code></li>
-     *     <li><code>spruce</code></li>
      *     <li><code>oak_swamp</code>: oak with more leaves and vines.</li>
-     *     <li><code>jungle_large</code>: 2x2 jungle tree</li>
-     *     <li><code>spruce_matchstick_large</code>: 2x2 spruce tree with minimal leafage</li>
-     *     <li><code>spruce_large</code>: 2x2 spruce tree</li>
+     *
+     *
      *     <li><code>well</code>: desert well</li>
      *     <li><code>grass</code>: a few spots of tall grass</li>
-     *     <li><code>grass_jungle</code>: little bushier grass feature</li>
-     *     <li><code>fern</code>: a few random ferns</li>
+     *     <li><code>grass_jungle</code>: little bushier grass feature (1.14 only)</li>
+     *     <li><code>lush_grass</code>: grass with patchy ferns (1.15+)</li>
+     *     <li><code>tall_grass</code>: 2-high grass patch (1.15+)</li>
+     *     <li><code>fern</code>: a few random 2-high ferns</li>
      *     <li><code>cactus</code>: random cacti</li>
      *     <li><code>dead_bush</code>: a few random dead bushi</li>
      *     <li><code>fossils</code>: underground fossils, placement little wonky</li>
@@ -2682,7 +3112,9 @@ public class CarpetExpression
      *     <li><code>ice_spike</code>: ice spike. Require snow block below to place.</li>
      *     <li><code>glowstone</code>: glowstone cluster. Required netherrack above it.</li>
      *     <li><code>melon</code>: a patch of melons</li>
+     *     <li><code>melon_pile</code>: a pile of melons (1.15+)</li>
      *     <li><code>pumpkin</code>: a patch of pumpkins</li>
+     *     <li><code>pumpkin_pile</code>: a pile of pumpkins (1.15+)</li>
      *     <li><code>sugarcane</code></li>
      *     <li><code>lilypad</code></li>
      *     <li><code>dungeon</code>: Dungeon. These are hard to place, and fail often.</li>
@@ -2848,6 +3280,7 @@ public class CarpetExpression
             CarpetContext cc = (CarpetContext)c;
             BlockState targetBlock = null;
             BlockValue.VectorLocator pointLocator;
+            boolean interactable = true;
             String name;
             try
             {
@@ -2855,8 +3288,14 @@ public class CarpetExpression
                 name = nameValue instanceof NullValue ? "" : nameValue.getString();
                 pointLocator = BlockValue.locateVec(cc, lv, 1, true);
                 if (lv.size()>pointLocator.offset)
-                    targetBlock = BlockValue.fromParams(cc, lv, pointLocator.offset, true).block.getBlockState();
-
+                {
+                    BlockValue.LocatorResult blockLocator = BlockValue.fromParams(cc, lv, pointLocator.offset, true, true);
+                    if (blockLocator.block != null) targetBlock = blockLocator.block.getBlockState();
+                    if (lv.size() > blockLocator.offset)
+                    {
+                        interactable = lv.get(blockLocator.offset).evalValue(c, Context.BOOLEAN).getBoolean();
+                    }
+                }
             }
             catch (IndexOutOfBoundsException e)
             {
@@ -2884,6 +3323,7 @@ public class CarpetExpression
             armorstand.setNoGravity(true);
             armorstand.setInvisible(true);
             armorstand.setInvulnerable(true);
+            armorstand.getDataTracker().set(ArmorStandEntity.ARMOR_STAND_FLAGS, (byte)(interactable?8 : 16|8));
             cc.s.getWorld().spawnEntity(armorstand);
             EntityValue result = new EntityValue(armorstand);
             return (_c, _t) -> result;
@@ -2935,6 +3375,17 @@ public class CarpetExpression
             return (_c, _t) -> res; // pass through for variables
         });
 
+        //"overidden" native call to cancel if on main thread
+        this.expr.addLazyFunction("task_join", 1, (c, t, lv) -> {
+            if (((CarpetContext)c).s.getMinecraftServer().isOnThread())
+                throw new InternalExpressionException("'task_join' cannot be called from main thread to avoid deadlocks");
+            Value v = lv.get(0).evalValue(c);
+            if (!(v instanceof ThreadValue))
+                throw new InternalExpressionException("'task_join' could only be used with a task value");
+            Value ret =  ((ThreadValue) v).join();
+            return (_c, _t) -> ret;
+        });
+
         this.expr.addLazyFunction("logger", 1, (c, t, lv) ->
         {
             Value res = lv.get(0).evalValue(c);
@@ -2968,6 +3419,7 @@ public class CarpetExpression
 
         this.expr.addLazyFunction("game_tick", -1, (c, t, lv) -> {
             ServerCommandSource s = ((CarpetContext)c).s;
+            if (!s.getMinecraftServer().isOnThread()) throw new InternalExpressionException("Unable to run ticks from threads");
             ((MinecraftServerInterface)s.getMinecraftServer()).forceTick( () -> System.nanoTime()- CarpetServer.scriptServer.tickStart<50000000L);
             if (lv.size()>0)
             {
@@ -2992,9 +3444,15 @@ public class CarpetExpression
             return (cc, tt) -> Value.TRUE;
         });
 
+        this.expr.addLazyFunction("seed", -1, (c, t, lv) -> {
+            ServerCommandSource s = ((CarpetContext)c).s;
+            Value ret = new NumericValue(s.getWorld().getSeed());
+            return (cc, tt) -> ret;
+        });
+
         this.expr.addLazyFunction("current_dimension", 0, (c, t, lv) -> {
             ServerCommandSource s = ((CarpetContext)c).s;
-            Value retval = new StringValue(nameFromRegistryId(Registry.DIMENSION.getId(s.getWorld().dimension.getType())));
+            Value retval = new StringValue(NBTSerializableValue.nameFromRegistryId(Registry.DIMENSION.getId(s.getWorld().dimension.getType())));
             return (cc, tt) -> retval;
         });
 
@@ -3050,26 +3508,31 @@ public class CarpetExpression
             if (lv.size() <= locator.offset)
                 throw new InternalExpressionException("'plop' needs extra argument indicating what to plop");
             String what = lv.get(locator.offset).evalValue(c).getString();
-            Boolean res = FeatureGenerator.spawn(what, ((CarpetContext)c).s.getWorld(), locator.block.getPos());
-            if (res == null)
-                return (c_, t_) -> Value.NULL;
-            if (what.equalsIgnoreCase("boulder"))  // there might be more of those
-                this.forceChunkUpdate(locator.block.getPos(), ((CarpetContext)c).s.getWorld());
-            return (c_, t_) -> new NumericValue(res);
+            Value [] result = new Value[]{Value.NULL};
+            ((CarpetContext)c).s.getMinecraftServer().executeSync( () ->
+            {
+
+                Boolean res = FeatureGenerator.spawn(what, ((CarpetContext) c).s.getWorld(), locator.block.getPos());
+                if (res == null)
+                    return;
+                if (what.equalsIgnoreCase("boulder"))  // there might be more of those
+                    this.forceChunkUpdate(locator.block.getPos(), ((CarpetContext) c).s.getWorld());
+                result[0] = new NumericValue(res);
+            });
+            Value ret = result[0]; // preventing from lazy evaluating of the result in case a future completes later
+            return (_c, _t) -> ret;
         });
 
         this.expr.addLazyFunction("schedule", -1, (c, t, lv) -> {
             if (lv.size()<2)
                 throw new InternalExpressionException("'schedule' should have at least 2 arguments, delay and call name");
-            Long delay = NumericValue.asNumber(lv.get(0).evalValue(c)).getLong();
+            long delay = NumericValue.asNumber(lv.get(0).evalValue(c)).getLong();
 
             Value functionValue = lv.get(1).evalValue(c);
             if (!(functionValue instanceof FunctionValue))
             {
                 String name = functionValue.getString();
-                functionValue = c.host.globalFunctions.get(name);
-                if (functionValue == null)
-                    throw new InternalExpressionException("Function "+name+" is not defined yet");
+                functionValue = c.host.getAssertFunction(this.expr.module, name);
             }
             FunctionValue function = (FunctionValue)functionValue;
 
@@ -3114,7 +3577,7 @@ public class CarpetExpression
             String file = null;
             if (lv.size()>1)
             {
-                String origfile = lv.get(0).evalValue(c).getString();
+                String origfile = lv.get(1).evalValue(c).getString();
                 file = origfile.toLowerCase(Locale.ROOT).replaceAll("[^A-Za-z0-9]", "");
                 if (file.isEmpty())
                 {
@@ -3128,7 +3591,42 @@ public class CarpetExpression
             ((CarpetScriptHost)((CarpetContext)c).host).setGlobalState(tag, file);
             return (cc, tt) -> Value.NULL;
         });
+
+        this.expr.addLazyFunction("statistic", 3, (c, t, lv) ->
+        {
+            Value playerValue = lv.get(0).evalValue(c);
+            CarpetContext cc = (CarpetContext)c;
+            ServerPlayerEntity player = EntityValue.getPlayerByValue(cc.s.getMinecraftServer(), playerValue);
+            if (player == null) return LazyValue.NULL;
+            Identifier category;
+            Identifier statName;
+            try
+            {
+                category = new Identifier(lv.get(1).evalValue(c).getString());
+                statName = new Identifier(lv.get(2).evalValue(c).getString());
+            }
+            catch (InvalidIdentifierException e)
+            {
+                return LazyValue.NULL;
+            }
+            StatType<?> type = Registry.STAT_TYPE.get(category);
+            if (type == null)
+                return LazyValue.NULL;
+            Stat<?> stat = getStat(type, statName);
+            if (stat == null)
+                return LazyValue.NULL;
+            return (_c, _t) -> new NumericValue(player.getStatHandler().getStat(stat));
+        });
     }
+
+    private <T> Stat<T> getStat(StatType<T> type, Identifier id)
+    {
+        T key = type.getRegistry().get(id);
+        if (key == null || !((StatTypeInterface)type).hasStatCreated(key))
+            return null;
+        return type.getOrCreateStat(key);
+    }
+
 
     /**
      * <h1>.</h1>
@@ -3136,11 +3634,13 @@ public class CarpetExpression
      * @param source source
      * @param origin origin
      */
-    public CarpetExpression(String expression, ServerCommandSource source, BlockPos origin)
+    public CarpetExpression(Module module, String expression, ServerCommandSource source, BlockPos origin)
     {
         this.origin = origin;
         this.source = source;
         this.expr = new Expression(expression);
+        this.expr.asAModule(module);
+
 
         API_BlockManipulation();
         API_EntityManipulation();
@@ -3218,11 +3718,11 @@ public class CarpetExpression
         }
         catch (ExpressionException e)
         {
-            throw new CarpetExpressionException(e.getMessage());
+            throw new CarpetExpressionException(e.getMessage(), e.stack);
         }
         catch (ArithmeticException ae)
         {
-            throw new CarpetExpressionException("Math doesn't compute... "+ae.getMessage());
+            throw new CarpetExpressionException("Math doesn't compute... "+ae.getMessage(), null);
         }
     }
 
@@ -3265,11 +3765,11 @@ public class CarpetExpression
         }
         catch (ExpressionException e)
         {
-            throw new CarpetExpressionException(e.getMessage());
+            throw new CarpetExpressionException(e.getMessage(), e.stack);
         }
         catch (ArithmeticException ae)
         {
-            throw new CarpetExpressionException("Math doesn't compute... "+ae.getMessage());
+            throw new CarpetExpressionException("Math doesn't compute... "+ae.getMessage(), null);
         }
     }
 
@@ -3355,7 +3855,11 @@ public class CarpetExpression
      *     should be running at startup. WARNING: all apps will run once at startup anyways, so be aware that their actions
      *     that are called statically, will be performed once anyways.</li>
      * </ul>
-     * <p>Unloading an app removes all of its state from the game, disables commands, and removes bounded events</p>
+     * <p>Unloading an app removes all of its state from the game, disables commands, and removes bounded events,
+     * and saves its global state. If more
+     * cleanup is needed, one can define an <code>__on_close()</code> function which will be executed when the module is unloaded,
+     * or server is closing, or crashing. However, there is no need to do that explicitly for the things mentioned
+     * in the previous statement.</p>
      * <p>Scripts can be loaded in shared(global) and player mode. Default is player, so all globals and stored functions are
      * individual for each player, meaning scripts don't need to worry about making sure they store some intermittent data
      * for each player independently. In global mode - all global values and stored functions are shared among all players.
@@ -3395,8 +3899,10 @@ public class CarpetExpression
      * __on_player_releases_item(player, item_tuple, hand)  // client action (e.g. bow)
      * __on_player_finishes_using_item(player, item_tuple, hand))  // server action (e.g. food), called item is from before it is used.
      * __on_player_clicks_block(player, block, face)  // left click attack on a block
-     * __on_player_right_clicks_block(player, item_tuple, hand, block, face, hitvec)
      * __on_player_breaks_block(player, block) // called after block is broken (the caller receives previous blockstate)
+     * __on_player_right_clicks_block(player, item_tuple, hand, block, face, hitvec)  // player right clicks block with anything
+     * __on_player_interacts_with_block(player, hand, block, face, hitvec)  //right click on a block resulted in activation of said block
+     * __on_player_places_block(player, item_tuple, hand, block) // player have just placed the block.
      * __on_player_interacts_with_entity(player, entity, hand)
      * __on_player_attacks_entity(player, entity)
      * __on_player_rides(player, forward, strafe, jumping, sneaking)
@@ -3409,6 +3915,8 @@ public class CarpetExpression
      * __on_player_stops_sprinting(player)
      * __on_player_drops_item(player)
      * __on_player_drops_stack(player)
+     *
+     * __on_statistic(player, category, event, value) // player statistic changes
      * </pre>
      * <h3><code>/script event</code> command</h3>
      * <p>used to display current events and bounded functions. use <code>add_to</code> ro register new event, or <code>remove_from</code>
