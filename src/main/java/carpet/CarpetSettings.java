@@ -255,10 +255,18 @@ public class CarpetSettings
     @Rule( desc = "Exposes server status HTTP endpoint", category = FEATURE )
     public static boolean serverStatusOn = false;
 
-    @Rule( desc = "Server status port", category = FEATURE )
+    private static class PortValidator extends Validator<Integer>{
+
+        @Override
+        public Integer validate(ServerCommandSource source, ParsedRule<Integer> currentRule, Integer newValue, String string) {
+            return (newValue >=0 && newValue <=65535) ? newValue : null;
+        }
+    }
+
+    @Rule( desc = "Server status port", category = FEATURE, strict = false, validate = PortValidator.class)
     public static int serverStatusPort = 3141;
 
-    @Rule( desc = "Server status secret", category = FEATURE )
+    @Rule( desc = "Server status secret", category = FEATURE, strict = false )
     public static String serverStatusSecret = "CHANGE_ME";
 
     @Rule(
@@ -553,7 +561,7 @@ public class CarpetSettings
             category = BUGFIX
     )
     public static boolean horseWanderingFix = false;
-    
+
     @Rule(
             desc = "Allows structure mobs to spawn in flat worlds",
             category = {EXPERIMENTAL, CREATIVE}
