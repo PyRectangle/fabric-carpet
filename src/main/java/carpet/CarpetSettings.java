@@ -580,4 +580,10 @@ public class CarpetSettings
             category = CREATIVE
     )
     public static boolean extremeBehaviours = false;
+
+    @Rule(
+            desc = "Client can provide alternative block placement",
+            category = {SURVIVAL}
+    )
+    public static boolean accurateBlockPlacement = false;
 }
