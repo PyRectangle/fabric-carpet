@@ -9,6 +9,9 @@ import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.player.HungerManager;
 import net.minecraft.network.NetworkSide;
 import net.minecraft.text.TranslatableText;
+import net.minecraft.text.LiteralText;
+import net.minecraft.text.BaseText;
+import net.minecraft.util.Formatting;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.ServerTask;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -123,5 +126,22 @@ public class EntityPlayerMPFake extends ServerPlayerEntity
         setHealth(20);
         this.hungerManager = new HungerManager();
         kill();
+    }
+
+    @Override
+    public BaseText getName() {
+        return this.getDisplayName();
+    }
+
+    @Override
+    public BaseText getDisplayName() {
+        BaseText name = new LiteralText("[BOT] " + this.getGameProfile().getName());
+        name.getStyle().setColor(Formatting.GRAY);
+        return name;
+    }
+
+    @Override
+    public BaseText method_14206() {
+        return this.getDisplayName();
     }
 }
