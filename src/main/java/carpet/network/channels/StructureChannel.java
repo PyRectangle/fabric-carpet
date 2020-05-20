@@ -69,27 +69,31 @@ public class StructureChannel implements PluginChannelHandler {
     }
 
     public synchronized void tick() {
-        for (Map.Entry<ServerPlayerEntity, Object2IntMap<ChunkPos>> playerEntry : playerMap.entrySet()) {
-            List<ChunkPos> updated = new ArrayList<>();
-            List<ChunkPos> removed = new ArrayList<>();
-            Object2IntMap<ChunkPos> chunks = playerEntry.getValue();
-            if(null == chunks){
-                continue;
-            }
-            for (Object2IntMap.Entry<ChunkPos> chunkEntry : chunks.object2IntEntrySet()) {
-                int age = chunkEntry.getIntValue();
-                if (age == 0) updated.add(chunkEntry.getKey());
-                chunkEntry.setValue(++age);
-                if (age > RESEND_TIMEOUT) removed.add(chunkEntry.getKey());
-            }
-            for (ChunkPos pos : removed) chunks.removeInt(pos);
-            if (!updated.isEmpty()) {
-                try {
-                    sendUpdate(playerEntry.getKey(), updated);
-                } catch (Exception e) {
-                    LOGGER.error("Error sending structures to " + playerEntry.getKey().getEntityName(), e);
+        try {
+            for (Map.Entry<ServerPlayerEntity, Object2IntMap<ChunkPos>> playerEntry : playerMap.entrySet()) {
+                List<ChunkPos> updated = new ArrayList<>();
+                List<ChunkPos> removed = new ArrayList<>();
+                Object2IntMap<ChunkPos> chunks = playerEntry.getValue();
+                if (null == chunks) {
+                    continue;
+                }
+                for (Object2IntMap.Entry<ChunkPos> chunkEntry : chunks.object2IntEntrySet()) {
+                    int age = chunkEntry.getIntValue();
+                    if (age == 0) updated.add(chunkEntry.getKey());
+                    chunkEntry.setValue(++age);
+                    if (age > RESEND_TIMEOUT) removed.add(chunkEntry.getKey());
+                }
+                for (ChunkPos pos : removed) chunks.removeInt(pos);
+                if (!updated.isEmpty()) {
+                    try {
+                        sendUpdate(playerEntry.getKey(), updated);
+                    } catch (Exception e) {
+                        LOGGER.error("Error sending structures to " + playerEntry.getKey().getEntityName(), e);
+                    }
                 }
             }
+        } catch (Exception e) {
+            LOGGER.error("Error in structure channel tick", e);
         }
     }
 
@@ -136,7 +140,7 @@ public class StructureChannel implements PluginChannelHandler {
 
     }
 
-    public void recordChunkSent(ServerPlayerEntity player, ChunkPos pos) {
+    public synchronized void recordChunkSent(ServerPlayerEntity player, ChunkPos pos) {
         if (null == player || null == pos) {
             return;
         }
