@@ -27,7 +27,7 @@ jobs:
     - name: FTP upload
       uses: SamKirkland/FTP-Deploy-Action@3.1.1
       with:
-        ftp-server: ${{ secrets.FTP_SERVER }}/carpet-builds
+        ftp-server: sftp://us-ny-04-3900x.dedicatedmc.io:7767/carpet-builds
         ftp-username: ${{ secrets.FTP_USER }}
         ftp-password: ${{ secrets.FTP_PASS }}
         local-dir: ./build/libs
