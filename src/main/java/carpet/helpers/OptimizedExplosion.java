@@ -4,15 +4,25 @@ package carpet.helpers;
 import java.math.RoundingMode;
 import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
+import carpet.logging.logHelpers.ExplosionLogHelper;
 import carpet.mixins.ExplosionAccessor;
 import carpet.CarpetSettings;
+import carpet.mixins.ExplosionMixin;
 import carpet.utils.Messenger;
+import com.google.common.collect.Lists;
+import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectListIterator;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.Material;
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.TntEntity;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.item.ItemStack;
@@ -21,14 +31,11 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.world.explosion.Explosion;
-import net.minecraft.world.loot.context.LootContext;
-import net.minecraft.world.loot.context.LootContextParameters;
+import net.minecraft.loot.context.LootContext;
+import net.minecraft.loot.context.LootContextParameters;
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 
-import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import net.minecraft.block.Block;
 import net.minecraft.enchantment.ProtectionEnchantment;
 import net.minecraft.entity.Entity;
@@ -46,6 +53,7 @@ public class OptimizedExplosion
     private static List<Entity> entitylist;
     private static Vec3d vec3dmem;
     private static long tickmem;
+    private static Vec3d vec3dZero = new Vec3d(0, 0, 0);
     // For disabling the explosion particles and sound
     public static int explosionSound = 0;
 
@@ -61,7 +69,7 @@ public class OptimizedExplosion
     private static ArrayList<Float> chances = new ArrayList<>();
     private static BlockPos blastChanceLocation;
 
-    public static void doExplosionA(Explosion e) {
+    public static void doExplosionA(Explosion e, ExplosionLogHelper eLogger) {
         ExplosionAccessor eAccess = (ExplosionAccessor) e;
         
         blastCalc(e);
@@ -112,9 +120,12 @@ public class OptimizedExplosion
             }
 
             if (entity instanceof TntEntity &&
-                    entity.x == eAccess.getEntity().x &&
-                    entity.y == eAccess.getEntity().y &&
-                    entity.z == eAccess.getEntity().z) {
+                    entity.getX() == eAccess.getEntity().getX() &&
+                    entity.getY() == eAccess.getEntity().getY() &&
+                    entity.getZ() == eAccess.getEntity().getZ()) {
+                if (eLogger != null) {
+                    eLogger.onEntityImpacted(entity, new Vec3d(0,-0.9923437498509884d, 0));
+                }
                 continue;
             }
 
@@ -122,9 +133,9 @@ public class OptimizedExplosion
                 double d12 = MathHelper.sqrt(entity.squaredDistanceTo(eAccess.getX(), eAccess.getY(), eAccess.getZ())) / (double) f3;
 
                 if (d12 <= 1.0D) {
-                    double d5 = entity.x - eAccess.getX();
-                    double d7 = entity.y + (double) entity.getStandingEyeHeight() - eAccess.getY();
-                    double d9 = entity.z - eAccess.getZ();
+                    double d5 = entity.getX() - eAccess.getX();
+                    double d7 = entity.getY() + (double) entity.getStandingEyeHeight() - eAccess.getY();
+                    double d9 = entity.getZ() - eAccess.getZ();
                     double d13 = (double) MathHelper.sqrt(d5 * d5 + d7 * d7 + d9 * d9);
 
                     if (d13 != 0.0D) {
@@ -151,6 +162,10 @@ public class OptimizedExplosion
 
                         if (entity instanceof LivingEntity) {
                             d11 = ProtectionEnchantment.transformExplosionKnockback((LivingEntity) entity, d10);
+                        }
+
+                        if (eLogger != null) {
+                            eLogger.onEntityImpacted(entity, new Vec3d(d5 * d11, d7 * d11, d9 * d11));
                         }
 
                         entity.setVelocity(entity.getVelocity().add(d5 * d11, d7 * d11, d9 * d11));
@@ -187,24 +202,30 @@ public class OptimizedExplosion
             world.playSound(null, posX, posY, posZ, SoundEvents.ENTITY_GENERIC_EXPLODE, SoundCategory.BLOCKS, 4.0F,
                     (1.0F + (world.random.nextFloat() - world.random.nextFloat()) * 0.2F) * 0.7F);
 
-            if (eAccess.getPower() >= 2.0F && damagesTerrain)
+            if (spawnParticles)
             {
-                world.addParticle(ParticleTypes.EXPLOSION_EMITTER, posX, posY, posZ, 1.0D, 0.0D, 0.0D);
-            }
-            else
-            {
-                world.addParticle(ParticleTypes.EXPLOSION, posX, posY, posZ, 1.0D, 0.0D, 0.0D);
+                if (eAccess.getPower() >= 2.0F && damagesTerrain)
+                {
+                    world.addParticle(ParticleTypes.EXPLOSION_EMITTER, posX, posY, posZ, 1.0D, 0.0D, 0.0D);
+                }
+                else
+                {
+                    world.addParticle(ParticleTypes.EXPLOSION, posX, posY, posZ, 1.0D, 0.0D, 0.0D);
+                }
             }
         }
 
         if (damagesTerrain)
         {
+            ObjectArrayList<Pair<ItemStack, BlockPos>> objectArrayList = new ObjectArrayList();
+            Collections.shuffle(e.getAffectedBlocks(), world.random);
+
             for (BlockPos blockpos : e.getAffectedBlocks())
             {
                 BlockState state = world.getBlockState(blockpos);
                 Block block = state.getBlock();
 
-                if (spawnParticles)
+                /*if (spawnParticles)
                 {
                     double d0 = (double)((float)blockpos.getX() + world.random.nextFloat());
                     double d1 = (double)((float)blockpos.getY() + world.random.nextFloat());
@@ -224,11 +245,11 @@ public class OptimizedExplosion
                     world.addParticle(ParticleTypes.POOF,
                             (d0 + posX) / 2.0D, (d1 + posY) / 2.0D, (d2 + posZ) / 2.0D, d3, d4, d5);
                     world.addParticle(ParticleTypes.SMOKE, d0, d1, d2, d3, d4, d5);
-                }
+                }*/
 
                 if (state.getMaterial() != Material.AIR)
                 {
-                    if (block.shouldDropItemsOnExplosion(e))
+                    if (block.shouldDropItemsOnExplosion(e) && world instanceof ServerWorld)
                     {
                         BlockEntity blockEntity = block.hasBlockEntity() ? world.getBlockEntity(blockpos) : null;
 
@@ -241,13 +262,17 @@ public class OptimizedExplosion
                         if (eAccess.getBlockDestructionType() == Explosion.DestructionType.DESTROY)
                             lootBuilder.put(LootContextParameters.EXPLOSION_RADIUS, eAccess.getPower());
 
-                        Block.dropStacks(state, lootBuilder);
+                        state.getDroppedStacks(lootBuilder).forEach((itemStackx) -> {
+                            method_24023(objectArrayList, itemStackx, blockpos.toImmutable());
+                        });
                     }
 
                     world.setBlockState(blockpos, Blocks.AIR.getDefaultState(), 3);
                     block.onDestroyedByExplosion(world, blockpos, e);
                 }
             }
+            objectArrayList.forEach(p -> Block.dropStack(world, p.getRight(), p.getLeft()));
+
         }
 
         if (eAccess.isCreateFire())
@@ -257,7 +282,7 @@ public class OptimizedExplosion
                 // Use the same Chunk reference because the positions are in the same xz-column
                 Chunk chunk = world.getChunk(blockpos1.getX() >> 4, blockpos1.getZ() >> 4);
 
-                BlockPos down = blockpos1.down();
+                BlockPos down = blockpos1.down(1);
                 if (chunk.getBlockState(blockpos1).getMaterial() == Material.AIR &&
                         chunk.getBlockState(down).isFullOpaque(world, down) &&
                         eAccess.getRandom().nextInt(3) == 0)
@@ -266,6 +291,26 @@ public class OptimizedExplosion
                 }
             }
         }
+    }
+
+    // copied from Explosion, need to move the code to the explosion code anyways and use shadows for
+    // simplicity, its not jarmodding anyways
+    private static void method_24023(ObjectArrayList<Pair<ItemStack, BlockPos>> objectArrayList, ItemStack itemStack, BlockPos blockPos) {
+        int i = objectArrayList.size();
+
+        for(int j = 0; j < i; ++j) {
+            Pair<ItemStack, BlockPos> pair = (Pair)objectArrayList.get(j);
+            ItemStack itemStack2 = pair.getLeft();
+            if (ItemEntity.canMerge(itemStack2, itemStack)) {
+                ItemStack itemStack3 = ItemEntity.merge(itemStack2, itemStack, 16);
+                objectArrayList.set(j, Pair.of(itemStack3, pair.getRight()));
+                if (itemStack.isEmpty()) {
+                    return;
+                }
+            }
+        }
+
+        objectArrayList.add(Pair.of(itemStack, blockPos));
     }
 
     private static void removeFast(List<Entity> lst, int index) {

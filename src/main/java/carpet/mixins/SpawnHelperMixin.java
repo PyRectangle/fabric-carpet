@@ -4,6 +4,8 @@ import carpet.CarpetSettings;
 import carpet.fakes.WorldInterface;
 import carpet.utils.SpawnReporter;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.FenceGateBlock;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityCategory;
 import net.minecraft.entity.EntityData;
@@ -12,6 +14,8 @@ import net.minecraft.entity.SpawnType;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.tag.BlockTags;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
@@ -36,38 +40,86 @@ public class SpawnHelperMixin
 
     @Redirect(method = "spawnEntitiesInChunk", at = @At(
             value = "INVOKE",
-            target = "Lnet/minecraft/world/World;doesNotCollide(Lnet/minecraft/util/math/Box;)Z"
+            target = "Lnet/minecraft/server/world/ServerWorld;doesNotCollide(Lnet/minecraft/util/math/Box;)Z"
     ))
-    private static boolean doesNotCollide(World world, Box bb)
+    private static boolean doesNotCollide(ServerWorld world, Box bb)
     {
         //.doesNotCollide is VERY expensive. On the other side - most worlds are not made of trapdoors in
         // various configurations, but solid and 'passable' blocks, like air, water grass, etc.
         // checking if in the BB of the entity are only passable blocks is very cheap and covers most cases
         // in case something more complex happens - we default to full block collision check
-        if (CarpetSettings.lagFreeSpawning)
+        if (!CarpetSettings.lagFreeSpawning)
         {
-            BlockPos.Mutable blockpos = new BlockPos.Mutable();
-            int minX = MathHelper.floor(bb.minX);
-            int maxX = MathHelper.ceil(bb.maxX);
-            int minY = MathHelper.floor(bb.minY);
-            int maxY = MathHelper.ceil(bb.maxY);
-            int minZ = MathHelper.floor(bb.minZ);
-            int maxZ = MathHelper.ceil(bb.maxZ);
-            for (int y = minY; y < maxY; y++)
-                for (int x = minX; x < maxX; x++)
-                    for (int z = minZ; z < maxZ; z++)
+            return world.doesNotCollide(bb);
+        }
+        int minX = MathHelper.floor(bb.x1);
+        int minY = MathHelper.floor(bb.y1);
+        int minZ = MathHelper.floor(bb.z1);
+        int maxY = MathHelper.ceil(bb.y2)-1;
+        BlockPos.Mutable blockpos = new BlockPos.Mutable();
+        if (bb.getXLength() <= 1) // small mobs
+        {
+            for (int y=minY; y <= maxY; y++)
+            {
+                blockpos.set(minX,y,minZ);
+                VoxelShape box = world.getBlockState(blockpos).getCollisionShape(world, blockpos);
+                if (box != VoxelShapes.empty())
+                {
+                    if (box == VoxelShapes.fullCube())
                     {
-                        blockpos.set(x, y, z);
-                        VoxelShape box = world.getBlockState(blockpos).getCollisionShape(world, blockpos);
-                        if ( box == VoxelShapes.empty())
-                            continue;
-                        if (Block.isShapeFullCube(box))
-                            return false;
+                        return false;
+                    }
+                    else
+                    {
                         return world.doesNotCollide(bb);
                     }
+                }
+            }
             return true;
         }
-        return world.doesNotCollide(bb);
+        // this code is only applied for mobs larger than 1 block in footprint
+        int maxX = MathHelper.ceil(bb.x2)-1;
+        int maxZ = MathHelper.ceil(bb.z2)-1;
+        for (int y = minY; y <= maxY; y++)
+            for (int x = minX; x <= maxX; x++)
+                for (int z = minZ; z <= maxZ; z++)
+                {
+                    blockpos.set(x, y, z);
+                    VoxelShape box = world.getBlockState(blockpos).getCollisionShape(world, blockpos);
+                    if (box != VoxelShapes.empty())
+                    {
+                        if (box == VoxelShapes.fullCube())
+                        {
+                            return false;
+                        }
+                        else
+                        {
+                            return world.doesNotCollide(bb);
+                        }
+                    }
+                }
+        int min_below = minY - 1;
+        // we need to check blocks below for extended hitbox and in that case call
+        // only applies to 'large mobs', slimes, spiders, magmacubes, ghasts, etc.
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int z = minZ; z <= maxZ; z++)
+            {
+                blockpos.set(x, min_below, z);
+                BlockState state = world.getBlockState(blockpos);
+                Block block = state.getBlock();
+                if (
+                        block.matches(BlockTags.FENCES) ||
+                        block.matches(BlockTags.WALLS) ||
+                        ((block instanceof FenceGateBlock) && !state.get(FenceGateBlock.OPEN))
+                )
+                {
+                    if (x == minX || x == maxX || z == minZ || z == maxZ) return world.doesNotCollide(bb);
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     @Redirect(method = "spawnEntitiesInChunk", at = @At(
@@ -91,9 +143,9 @@ public class SpawnHelperMixin
 
     @Redirect(method = "spawnEntitiesInChunk", at = @At(
             value = "INVOKE",
-            target = "Lnet/minecraft/world/World;spawnEntity(Lnet/minecraft/entity/Entity;)Z"
+            target = "Lnet/minecraft/server/world/ServerWorld;spawnEntity(Lnet/minecraft/entity/Entity;)Z"
     ))
-    private static boolean spawnEntity(World world, Entity entity_1)
+    private static boolean spawnEntity(ServerWorld world, Entity entity_1)
     {
         if (CarpetSettings.lagFreeSpawning)
             // we used the mob - next time we will create a new one when needed
@@ -128,7 +180,7 @@ public class SpawnHelperMixin
             target = "Lnet/minecraft/entity/player/PlayerEntity;squaredDistanceTo(DDD)D"
     ))
     private static double getSqDistanceTo(PlayerEntity playerEntity, double double_1, double double_2, double double_3,
-                                          EntityCategory entityCategory_1, World world_1, WorldChunk worldChunk_1, BlockPos blockPos_1)
+                                          EntityCategory entityCategory_1, ServerWorld world_1, WorldChunk worldChunk_1, BlockPos blockPos_1)
     {
         double distanceTo = playerEntity.squaredDistanceTo(double_1, double_2, double_3);
         if (CarpetSettings.lagFreeSpawning && distanceTo > 16384.0D && entityCategory_1 != EntityCategory.CREATURE)

@@ -14,8 +14,8 @@ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import net.minecraft.command.arguments.BlockPosArgumentType;
 import net.minecraft.command.arguments.DimensionArgumentType;
 import net.minecraft.entity.EntityCategory;
-import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.DyeColor;
 import net.minecraft.util.math.BlockPos;
@@ -183,7 +183,7 @@ public class SpawnCommand {
         TickSpeed.tickrate_advance(null, 0, null, null);
         // tick warp given player
         ServerCommandSource csource = null;
-        PlayerEntity player = null;
+        ServerPlayerEntity player = null;
         try {
             player = source.getPlayer();
             csource = source;
@@ -248,7 +248,7 @@ public class SpawnCommand {
         }
 
         EntityCategory cat = getCategory(mobtype);
-        Messenger.send(source, SpawnReporter.printEntitiesByType(cat, world));
+        Messenger.send(source, SpawnReporter.printEntitiesByType(cat, world, true));
         return 1;
     }
 }

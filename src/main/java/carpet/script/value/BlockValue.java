@@ -12,7 +12,10 @@ import net.minecraft.block.Blocks;
 import net.minecraft.item.ItemPlacementContext;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.state.property.Property;
 import net.minecraft.util.GlobalPos;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -24,8 +27,10 @@ import net.minecraft.world.World;
 import net.minecraft.world.chunk.WorldChunk;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -72,120 +77,9 @@ public class BlockValue extends Value
         throw new InternalExpressionException("Cannot parse block: "+str);
     }
 
-    public static VectorLocator locateVec(CarpetContext c, List<LazyValue> params, int offset)
-    {
-        return locateVec(c,params, offset, false);
-    }
-    public static VectorLocator locateVec(CarpetContext c, List<LazyValue> params, int offset, boolean optionalDirection)
-    {
-        try
-        {
-            Value v1 = params.get(0 + offset).evalValue(c);
-            if (v1 instanceof BlockValue)
-            {
-                return (new VectorLocator(new Vec3d(((BlockValue) v1).getPos()).add(0.5,0.5,0.5), 1+offset)).fromBlock();
-            }
-            if (v1 instanceof ListValue)
-            {
-                List<Value> args = ((ListValue) v1).getItems();
-                Vec3d pos = new Vec3d(
-                        NumericValue.asNumber(args.get(0)).getDouble(),
-                        NumericValue.asNumber(args.get(1)).getDouble(),
-                        NumericValue.asNumber(args.get(2)).getDouble());
-                double yaw = 0.0D;
-                double pitch = 0.0D;
-                if (args.size()>3 && optionalDirection)
-                {
-                    yaw = NumericValue.asNumber(args.get(3)).getDouble();
-                    pitch = NumericValue.asNumber(args.get(4)).getDouble();
-                }
-                return new VectorLocator(pos,offset+1, yaw, pitch);
-            }
-            Vec3d pos = new Vec3d(
-                    NumericValue.asNumber(v1).getDouble(),
-                    NumericValue.asNumber(params.get(1 + offset).evalValue(c)).getDouble(),
-                    NumericValue.asNumber(params.get(2 + offset).evalValue(c)).getDouble());
-            double yaw = 0.0D;
-            double pitch = 0.0D;
-            int eatenLength = 3;
-            if (params.size()>3+offset && optionalDirection)
-            {
-                yaw = NumericValue.asNumber(params.get(3 + offset).evalValue(c)).getDouble();
-                pitch = NumericValue.asNumber(params.get(4 + offset).evalValue(c)).getDouble();
-                eatenLength = 5;
-            }
-
-            return new VectorLocator(pos,offset+eatenLength, yaw, pitch);
-        }
-        catch (IndexOutOfBoundsException e)
-        {
-            throw new InternalExpressionException("Position should be defined either by three coordinates, or a block value");
-        }
-    }
-
     public static BlockPos locateBlockPos(CarpetContext c, int xpos, int ypos, int zpos)
     {
         return new BlockPos(c.origin.getX() + xpos, c.origin.getY() + ypos, c.origin.getZ() + zpos);
-    }
-
-    public static LocatorResult fromParams(CarpetContext c, List<LazyValue> params, int offset)
-    {
-        return fromParams(c, params,offset, false, false);
-    }
-
-    public static LocatorResult fromParams(CarpetContext c, List<LazyValue> params, int offset, boolean acceptString)
-    {
-        return fromParams(c, params,offset, acceptString, false);
-    }
-
-    public static LocatorResult fromParams(CarpetContext c, List<LazyValue> params, int offset, boolean acceptString, boolean optional)
-    {
-        try
-        {
-            Value v1 = params.get(0 + offset).evalValue(c);
-            //add conditional from string name
-            if (optional && v1 instanceof NullValue)
-            {
-                return new LocatorResult(null, 1+offset);
-            }
-            if (acceptString && v1 instanceof StringValue)
-            {
-                return new LocatorResult(fromString(v1.getString()), 1+offset);
-            }
-            if (v1 instanceof BlockValue)
-            {
-                return new LocatorResult(((BlockValue) v1), 1+offset);
-            }
-            if (v1 instanceof ListValue)
-            {
-                List<Value> args = ((ListValue) v1).getItems();
-                int xpos = (int) NumericValue.asNumber(args.get(0)).getLong();
-                int ypos = (int) NumericValue.asNumber(args.get(1)).getLong();
-                int zpos = (int) NumericValue.asNumber(args.get(2)).getLong();
-                return new LocatorResult(
-                        new BlockValue(
-                                null,
-                                c.s.getWorld(),
-                                new BlockPos(c.origin.getX() + xpos, c.origin.getY() + ypos, c.origin.getZ() + zpos)
-                        ),
-                        1+offset);
-            }
-            int xpos = (int) NumericValue.asNumber(v1).getLong();
-            int ypos = (int) NumericValue.asNumber( params.get(1 + offset).evalValue(c)).getLong();
-            int zpos = (int) NumericValue.asNumber( params.get(2 + offset).evalValue(c)).getLong();
-            return new LocatorResult(
-                    new BlockValue(
-                            null,
-                            c.s.getWorld(),
-                            new BlockPos(c.origin.getX() + xpos, c.origin.getY() + ypos, c.origin.getZ() + zpos)
-                    ),
-                    3+offset
-            );
-        }
-        catch (IndexOutOfBoundsException e)
-        {
-            throw new InternalExpressionException("Block should be defined either by three coordinates, a block value, or a proper string");
-        }
     }
 
     public BlockState getBlockState()
@@ -291,45 +185,32 @@ public class BlockValue extends Value
 
     public ServerWorld getWorld() { return world;}
 
-
-    public static class LocatorResult
+    @Override
+    public Tag toTag(boolean force)
     {
-        public final BlockValue block;
-        public final int offset;
-        LocatorResult(BlockValue b, int o)
+        if (!force) throw new NBTSerializableValue.IncompatibleTypeException(this);
+        // follows falling block convertion
+        CompoundTag tag =  new CompoundTag();
+        CompoundTag state = new CompoundTag();
+        BlockState s = getBlockState();
+        state.put("Name", StringTag.of(Registry.BLOCK.getId(s.getBlock()).toString()));
+        Collection<Property<?>> properties = s.getProperties();
+        if (!properties.isEmpty())
         {
-            block = b;
-            offset = o;
+            CompoundTag props = new CompoundTag();
+            for (Property<?> p: properties)
+            {
+                props.put(p.getName(), StringTag.of(s.get(p).toString().toLowerCase(Locale.ROOT)));
+            }
+            state.put("Properties", props);
         }
-    }
-
-    public static class VectorLocator
-    {
-        public Vec3d vec;
-        public final int offset;
-        public final double yaw;
-        public final double pitch;
-        public boolean fromBlock;
-        VectorLocator(Vec3d v, int o)
+        tag.put("BlockState", state);
+        CompoundTag dataTag = getData();
+        if (dataTag != null)
         {
-            vec = v;
-            offset = o;
-            yaw = 0.0D;
-            pitch = 0.0D;
+            tag.put("TileEntityData", dataTag);
         }
-        VectorLocator(Vec3d v, int o, double y, double p)
-        {
-            vec = v;
-            offset = o;
-            yaw = y;
-            pitch = p;
-        }
-
-        public VectorLocator fromBlock()
-        {
-            fromBlock = true;
-            return this;
-        }
+        return tag;
     }
 
     public enum SpecificDirection {
@@ -430,7 +311,7 @@ public class BlockValue extends Value
         }
 
         @Override
-        public boolean isPlayerSneaking() {
+        public boolean shouldCancelInteraction() {
             return sneakPlace;
         }
 

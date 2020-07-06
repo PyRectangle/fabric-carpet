@@ -3,8 +3,11 @@ package carpet.mixins;
 import carpet.helpers.TickSpeed;
 import carpet.utils.CarpetProfiler;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.util.SystemUtil;
+import net.minecraft.server.ServerTask;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Util;
 import net.minecraft.util.profiler.DisableableProfiler;
+import net.minecraft.util.thread.ReentrantThreadExecutor;
 import org.apache.logging.log4j.Logger;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,7 +20,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.function.BooleanSupplier;
 
 @Mixin(MinecraftServer.class)
-public abstract class MinecraftServer_tickspeedMixin
+public abstract class MinecraftServer_tickspeedMixin extends ReentrantThreadExecutor<ServerTask>
 {
     @Shadow private volatile boolean running;
 
@@ -31,6 +34,11 @@ public abstract class MinecraftServer_tickspeedMixin
 
     @Shadow @Final private DisableableProfiler profiler;
 
+    public MinecraftServer_tickspeedMixin(String name)
+    {
+        super(name);
+    }
+
     @Shadow protected abstract void tick(BooleanSupplier booleanSupplier_1);
 
     @Shadow protected abstract boolean shouldKeepTicking();
@@ -43,10 +51,12 @@ public abstract class MinecraftServer_tickspeedMixin
 
     @Shadow private volatile boolean loading;
 
+    @Shadow public abstract Iterable<ServerWorld> getWorlds();
+
     CarpetProfiler.ProfilerToken currentSection;
-    
+
     private float carpetMsptAccum = 0.0f;
-    
+
     /**
      * To ensure compatibility with other mods we should allow milliseconds
      */
@@ -67,7 +77,7 @@ public abstract class MinecraftServer_tickspeedMixin
     {
         while (this.running)
         {
-            //long long_1 = SystemUtil.getMeasuringTimeMs() - this.timeReference;
+            //long long_1 = Util.getMeasuringTimeMs() - this.timeReference;
             //CM deciding on tick speed
             if (CarpetProfiler.tick_health_requested != 0L)
             {
@@ -78,7 +88,7 @@ public abstract class MinecraftServer_tickspeedMixin
             if (TickSpeed.time_warp_start_time != 0 && TickSpeed.continueWarp())
             {
                 //making sure server won't flop after the warp or if the warp is interrupted
-                this.timeReference = this.field_4557 = SystemUtil.getMeasuringTimeMs();
+                this.timeReference = this.field_4557 = Util.getMeasuringTimeMs();
                 carpetMsptAccum = TickSpeed.mspt;
             }
             else
@@ -88,11 +98,11 @@ public abstract class MinecraftServer_tickspeedMixin
                 	// Tickrate changed. Ensure that we use the correct value.
                 	carpetMsptAccum = TickSpeed.mspt;
                 }
-                
+
                 msThisTick = (long)carpetMsptAccum; // regular tick
                 carpetMsptAccum += TickSpeed.mspt - msThisTick;
-                
-                long_1 = SystemUtil.getMeasuringTimeMs() - this.timeReference;
+
+                long_1 = Util.getMeasuringTimeMs() - this.timeReference;
             }
             //end tick deciding
             //smoothed out delay to include mcpt component. With 50L gives defaults.
@@ -115,14 +125,36 @@ public abstract class MinecraftServer_tickspeedMixin
             this.profiler.push("tick");
             this.tick(TickSpeed.time_warp_start_time != 0 ? ()->true : this::shouldKeepTicking);
             this.profiler.swap("nextTickWait");
+            if (TickSpeed.time_warp_start_time != 0) // clearing all hanging tasks no matter what when warping
+            {
+                while(this.runEveryTask()) {Thread.yield();}
+            }
             this.field_19249 = true;
-            this.field_19248 = Math.max(SystemUtil.getMeasuringTimeMs() + /*50L*/ msThisTick, this.timeReference);
+            this.field_19248 = Math.max(Util.getMeasuringTimeMs() + /*50L*/ msThisTick, this.timeReference);
+            // run all tasks (this will not do a lot when warping), but that's fine since we already run them
             this.method_16208();
             this.profiler.pop();
             this.profiler.endTick();
             this.loading = true;
         }
 
+    }
+
+
+    private boolean runEveryTask() {
+        if (super.runTask()) {
+            return true;
+        } else {
+            if (true) { // unconditionally this time
+                for(ServerWorld serverlevel : getWorlds()) {
+                    if (serverlevel.getChunkManager().executeQueuedTasks()) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
     }
 
     @Inject(method = "tick", at = @At(
@@ -172,7 +204,7 @@ public abstract class MinecraftServer_tickspeedMixin
     }
     @Inject(method = "method_16208", at = @At(
             value = "INVOKE",
-            target = "Lnet/minecraft/server/MinecraftServer;waitFor(Ljava/util/function/BooleanSupplier;)V",
+            target = "Lnet/minecraft/server/MinecraftServer;runTasks(Ljava/util/function/BooleanSupplier;)V",
             shift = At.Shift.BEFORE
     ))
     private void stopAsync(CallbackInfo ci)

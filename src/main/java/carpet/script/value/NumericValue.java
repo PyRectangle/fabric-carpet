@@ -1,9 +1,14 @@
 package carpet.script.value;
 
 import carpet.script.exception.InternalExpressionException;
+import net.minecraft.nbt.DoubleTag;
+import net.minecraft.nbt.IntTag;
+import net.minecraft.nbt.LongTag;
+import net.minecraft.nbt.Tag;
 import org.apache.commons.lang3.StringUtils;
 
 import java.math.BigDecimal;
+import java.util.Locale;
 
 import static java.lang.Math.abs;
 
@@ -11,6 +16,13 @@ public class NumericValue extends Value
 {
     private Double value;
     final static double epsilon = 1024*Double.MIN_VALUE;
+
+    public static NumericValue asNumber(Value v1, String id)
+    {
+        if (!(v1 instanceof NumericValue))
+            throw new InternalExpressionException("Argument "+id+" has to be of a numeric type");
+        return ((NumericValue) v1);
+    }
 
     public static NumericValue asNumber(Value v1)
     {
@@ -42,7 +54,7 @@ public class NumericValue extends Value
         }
         else
         {
-            return String.format("%.1f..", getDouble());
+            return String.format(Locale.ROOT, "%.1f..", getDouble());
         }
     }
 
@@ -54,6 +66,10 @@ public class NumericValue extends Value
     public double getDouble()
     {
         return value;
+    }
+    public float getFloat()
+    {
+        return value.floatValue();
     }
 
     public static long floor(double double_1) {
@@ -188,4 +204,24 @@ public class NumericValue extends Value
     }
 
 
+    public int getInt()
+    {
+        return (int)getLong();
+    }
+
+    @Override
+    public Tag toTag(boolean force)
+    {
+        long longValue = getLong();
+        if (value == (double)longValue)
+        {
+            if (abs(value) < Integer.MAX_VALUE-2)
+                return IntTag.of((int)longValue);
+            return LongTag.of(getLong());
+        }
+        else
+        {
+            return DoubleTag.of(value);
+        }
+    }
 }

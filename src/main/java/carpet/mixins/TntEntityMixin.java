@@ -54,7 +54,7 @@ public abstract class TntEntityMixin extends Entity implements TntEntityInterfac
     {
         if (LoggerRegistry.__tnt && logHelper != null && !logHelper.initialized)
         {
-            logHelper.onPrimed(x, y, z, getVelocity());
+            logHelper.onPrimed(getX(), getY(), getZ(), getVelocity());
         }
     }
 
@@ -72,11 +72,14 @@ public abstract class TntEntityMixin extends Entity implements TntEntityInterfac
     private void onExplode(CallbackInfo ci)
     {
         if (LoggerRegistry.__tnt && logHelper != null)
-            logHelper.onExploded(x, y, z);
+            logHelper.onExploded(getX(), getY(), getZ(), this.world.getTime());
 
         if (mergedTNT > 1)
             for (int i = 0; i < mergedTNT - 1; i++)
-                this.world.createExplosion(this, this.x, this.y + (double)(this.getHeight() / 16.0F), this.z, 4.0F, Explosion.DestructionType.BREAK);
+                this.world.createExplosion(this, this.getX(), this.getY() + (double)(this.getHeight() / 16.0F),
+                        this.getZ(),
+                        4.0F,
+                        Explosion.DestructionType.BREAK);
     }
 
     @Inject(method = "tick", at = @At(value = "INVOKE",
@@ -94,7 +97,7 @@ public abstract class TntEntityMixin extends Entity implements TntEntityInterfac
                         TntEntity entityTNTPrimed = (TntEntity)entity;
                         Vec3d tntVelocity = entityTNTPrimed.getVelocity();
                         if(tntVelocity.x == 0 && tntVelocity.y == 0 && tntVelocity.z == 0
-                                && this.x == entityTNTPrimed.x && this.z == entityTNTPrimed.z && this.y == entityTNTPrimed.y
+                                && this.getX() == entityTNTPrimed.getX() && this.getZ() == entityTNTPrimed.getZ() && this.getY() == entityTNTPrimed.getY()
                                 && this.fuseTimer == entityTNTPrimed.getFuseTimer()){
                             mergedTNT += ((TntEntityInterface) entityTNTPrimed).getMergedTNT();
                             entityTNTPrimed.remove();

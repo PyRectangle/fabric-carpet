@@ -30,12 +30,12 @@ public abstract class ItemEntityMixin extends Entity implements ItemEntityInterf
     }
 
     @Override
-    public int getAge() {
+    public int getAgeCM() {
         return this.age;
     }
 
     @Override
-    public int getPickupDelay() {
+    public int getPickupDelayCM() {
         return this.pickupDelay;
     }
 
@@ -82,6 +82,7 @@ public abstract class ItemEntityMixin extends Entity implements ItemEntityInterf
         ItemStack otherStack = other.getStack();
         if (selfStack.getItem() == otherStack.getItem()
                 && !InventoryHelper.shulkerBoxHasItems(selfStack)
+                && !InventoryHelper.shulkerBoxHasItems(otherStack)
                 && selfStack.hasTag() == otherStack.hasTag()
                 && selfStack.getCount() + otherStack.getCount() <= SHULKERBOX_MAX_STACK_AMOUNT)
         {
@@ -90,8 +91,8 @@ public abstract class ItemEntityMixin extends Entity implements ItemEntityInterf
             selfStack.increment(amount);
             self.setStack(selfStack);
 
-            this.pickupDelay = Math.max(((ItemEntityInterface)other).getPickupDelay(), this.pickupDelay);
-            this.age = Math.min(((ItemEntityInterface)other).getAge(), this.age);
+            this.pickupDelay = Math.max(((ItemEntityInterface)other).getPickupDelayCM(), this.pickupDelay);
+            this.age = Math.min(((ItemEntityInterface)other).getAgeCM(), this.age);
 
             otherStack.decrement(amount);
             if (otherStack.isEmpty())

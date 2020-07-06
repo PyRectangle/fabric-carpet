@@ -44,7 +44,7 @@ public class LoadedCommand {
         if (null == chunk) {
             lst.add(Messenger.c("g Chunk is unloaded"));
         } else {
-            ThreadedAnvilChunkStorage storage = source.getMinecraftServer().getWorld(dim).method_14178().threadedAnvilChunkStorage;
+            ThreadedAnvilChunkStorage storage = source.getMinecraftServer().getWorld(dim).getChunkManager().threadedAnvilChunkStorage;
             ChunkHolder holder = ((IThreadedAnvilChunkStorage) storage).getCurrentChunks().get(chunkPos.toLong());
             lst.add(Messenger.c(String.format("g Chunk %s: ticket lvl: %d (%s)", holder.getPos().toString(), holder.getLevel(), ChunkHolder.getLevelType(holder.getLevel()))));
         }
@@ -54,7 +54,7 @@ public class LoadedCommand {
     }
 
     private static int getChunks(ServerCommandSource source, ServerPlayerEntity player, DimensionType dim) {
-        ThreadedAnvilChunkStorage storage = source.getMinecraftServer().getWorld(dim).method_14178().threadedAnvilChunkStorage;
+        ThreadedAnvilChunkStorage storage = source.getMinecraftServer().getWorld(dim).getChunkManager().threadedAnvilChunkStorage;
 
         List<BaseText> lst = new ArrayList<>();
 

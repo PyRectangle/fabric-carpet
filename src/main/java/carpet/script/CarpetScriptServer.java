@@ -15,6 +15,7 @@ import carpet.utils.Messenger;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.tree.CommandNode;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.util.math.BlockPos;
 
@@ -34,6 +35,7 @@ import static net.minecraft.server.command.CommandManager.literal;
 public class CarpetScriptServer
 {
     //make static for now, but will change that later:
+    public final MinecraftServer server;
     public final CarpetScriptHost globalHost;
     public final Map<String, CarpetScriptHost> modules;
     public long tickStart;
@@ -47,16 +49,18 @@ public class CarpetScriptServer
         add(new BundledModule("event_test", false));
         add(new BundledModule("stats_test", false));
         add(new BundledModule("math", true));
+        add(new BundledModule("chunk_display", false));
     }};
 
-    public CarpetScriptServer()
+    public CarpetScriptServer(MinecraftServer server)
     {
+        this.server = server;
         ScriptHost.systemGlobals.clear();
-        events = new CarpetEventServer();
+        events = new CarpetEventServer(server);
         modules = new HashMap<>();
         tickStart = 0L;
         stopAll = false;
-        holyMoly = CarpetServer.minecraft_server.getCommandManager().getDispatcher().getRoot().getChildren().stream().map(CommandNode::getName).collect(Collectors.toSet());
+        holyMoly = server.getCommandManager().getDispatcher().getRoot().getChildren().stream().map(CommandNode::getName).collect(Collectors.toSet());
         globalHost = CarpetScriptHost.create(this, null, false, null);
     }
 
@@ -64,10 +68,10 @@ public class CarpetScriptServer
     {
         if (CarpetSettings.scriptsAutoload)
         {
-            Messenger.m(CarpetServer.minecraft_server.getCommandSource(), "Auto-loading world scarpet apps");
+            Messenger.m(server.getCommandSource(), "Auto-loading world scarpet apps");
             for (String moduleName: listAvailableModules(false))
             {
-                addScriptHost(CarpetServer.minecraft_server.getCommandSource(), moduleName, true, true);
+                addScriptHost(server.getCommandSource(), moduleName, true, true);
             }
         }
 
@@ -75,8 +79,8 @@ public class CarpetScriptServer
 
     public Module getModule(String name, boolean allowLibraries)
     {
-        File folder = CarpetServer.minecraft_server.getLevelStorage().resolveFile(
-                CarpetServer.minecraft_server.getLevelName(), "scripts");
+        File folder = server.getLevelStorage().resolveFile(
+                server.getLevelName(), "scripts");
         File[] listOfFiles = folder.listFiles();
         if (listOfFiles != null)
             for (File script : listOfFiles)
@@ -110,8 +114,8 @@ public class CarpetScriptServer
                 if (!mi.isLibrary()) moduleNames.add(mi.getName());
             }
         }
-        File folder = CarpetServer.minecraft_server.getLevelStorage().resolveFile(
-                CarpetServer.minecraft_server.getLevelName(), "scripts");
+        File folder = server.getLevelStorage().resolveFile(
+                server.getLevelName(), "scripts");
         File[] listOfFiles = folder.listFiles();
         if (listOfFiles == null)
             return moduleNames;
@@ -164,7 +168,7 @@ public class CarpetScriptServer
 
         modules.put(name, newHost);
 
-        if (!addConfig(source, name) && autoload)
+        if (autoload && !newHost.persistenceRequired)
         {
             removeScriptHost(source, name);
             return false;
@@ -172,28 +176,6 @@ public class CarpetScriptServer
         //addEvents(source, name);
         addCommand(source, name);
         return true;
-    }
-
-
-    private boolean addConfig(ServerCommandSource source, String hostName)
-    {
-        CarpetScriptHost host = modules.get(hostName);
-        if (host == null || host.getFunction("__config") == null)
-        {
-            return false;
-        }
-        try
-        {
-            Value ret = host.callUDF(BlockPos.ORIGIN, source, host.getFunction("__config"), Collections.emptyList());
-            if (!(ret instanceof MapValue)) return false;
-            Map<Value, Value> config = ((MapValue) ret).getMap();
-            host.setPerPlayer(config.getOrDefault(new StringValue("scope"), new StringValue("player")).getString().equalsIgnoreCase("player"));
-            return config.getOrDefault(new StringValue("stay_loaded"), Value.FALSE).getBoolean();
-        }
-        catch (NullPointerException | InvalidCallbackException ignored)
-        {
-        }
-        return false;
     }
 
     private void addCommand(ServerCommandSource source, String hostName)
@@ -245,7 +227,7 @@ public class CarpetScriptServer
                                     })));
         }
         Messenger.m(source, "gi "+hostName+" app loaded with /"+hostName+" command");
-        CarpetServer.minecraft_server.getCommandManager().getDispatcher().register(command);
+        server.getCommandManager().getDispatcher().register(command);
         CarpetServer.settingsManager.notifyPlayersCommandsChanged();
     }
 

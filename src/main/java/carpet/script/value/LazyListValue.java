@@ -1,11 +1,13 @@
 package carpet.script.value;
 
 import carpet.script.exception.InternalExpressionException;
+import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.Tag;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 
 public abstract class LazyListValue extends AbstractListValue implements Iterator<Value>
 {
@@ -48,7 +50,7 @@ public abstract class LazyListValue extends AbstractListValue implements Iterato
             @Override
             public String getString()
             {
-                return String.format("[%d, %d, ..., %d]",start, start+stepp, limit);
+                return String.format(Locale.ROOT, "[%d, %d, ..., %d)",start, start+stepp, limit);
             }
         };
     }
@@ -151,5 +153,12 @@ public abstract class LazyListValue extends AbstractListValue implements Iterato
     public int hashCode()
     {
         return ("i"+getString()).hashCode();
+    }
+
+    @Override
+    public Tag toTag(boolean force)
+    {
+        if (!force) throw new NBTSerializableValue.IncompatibleTypeException(this);
+        return StringTag.of(getString());
     }
 }
