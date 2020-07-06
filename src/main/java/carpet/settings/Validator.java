@@ -17,28 +17,30 @@ public abstract class Validator<T>
     public abstract T validate(ServerCommandSource source, ParsedRule<T> currentRule, T newValue, String string);
     public String description() {return null;}
 
-    public static class POSITIVE_NUMBER<T extends Number> extends Validator<T>
-    {
-        @Override
-        public T validate(ServerCommandSource source, ParsedRule<T> currentRule, T newValue, String string)
-        {
-            return newValue.doubleValue() > 0 ? newValue : null;
-        }
-        @Override
-        public String description() { return "Must be a positive number"; }
-    }
-
     public static class _COMMAND<T> extends Validator<T>
     {
         @Override
         public T validate(ServerCommandSource source, ParsedRule<T> currentRule, T newValue, String string)
         {
-            if (CarpetServer.settingsManager != null)
+            if (CarpetServer.settingsManager != null && source != null)
                 CarpetServer.settingsManager.notifyPlayersCommandsChanged();
             return newValue;
         }
         @Override
         public String description() { return "It has an accompanying command";}
+    }
+
+    public static class _CLIENT<T> extends Validator<T>
+    {
+        @Override
+        public T validate(ServerCommandSource source, ParsedRule<T> currentRule, T newValue, String string)
+        {
+            return newValue;
+        }
+        @Override
+        public String description() { return "Its a client command so can be issued when connecting to non-carpet servers. " +
+                "In client-server setting it will only affect the executing player, so each player needs to type it" +
+                " separately for the desired effect";}
     }
 
     public static class _COMMAND_LEVEL_VALIDATOR extends Validator<String> {
@@ -105,5 +107,16 @@ public abstract class Validator<T>
         }
         @Override
         public String description() { return "Must be a positive number";}
+    }
+
+    public static class PROBABILITY <T extends Number> extends Validator<T>
+    {
+        @Override
+        public T validate(ServerCommandSource source, ParsedRule<T> currentRule, T newValue, String string)
+        {
+            return (newValue.doubleValue() >= 0 && newValue.doubleValue() <= 1 )? newValue : null;
+        }
+        @Override
+        public String description() { return "Must be between 0 and 1";}
     }
 }

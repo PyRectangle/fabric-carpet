@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Random;
 
 import carpet.commands.*;
+import carpet.network.ServerNetworkHandler;
 import carpet.helpers.TickSpeed;
 import carpet.logging.LoggerRegistry;
 import carpet.network.PluginChannelManager;
@@ -16,6 +17,7 @@ import carpet.utils.HUDController;
 import carpet.utils.MobAI;
 import carpet.utils.ServerStatus;
 import com.mojang.brigadier.CommandDispatcher;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -48,7 +50,6 @@ public class CarpetServer // static for now - easier to handle all around the co
 
     public static void onGameStarted()
     {
-        LoggerRegistry.initLoggers();
         settingsManager = new SettingsManager(CarpetSettings.carpetVersion, "carpet", "Carpet Mod");
         settingsManager.parseSettingsClass(CarpetSettings.class);
         extensions.forEach(CarpetExtension::onGameStarted);
@@ -66,9 +67,10 @@ public class CarpetServer // static for now - easier to handle all around the co
             if (sm != null) sm.attachServer(server);
             e.onServerLoaded(server);
         });
-        scriptServer = new CarpetScriptServer();
-        scriptServer.loadAllWorldScripts();
+        scriptServer = new CarpetScriptServer(server);
         MobAI.resetTrackers();
+        LoggerRegistry.initLoggers();
+        //TickSpeed.reset();
 
         if (CarpetSettings.serverStatusOn) {
             try {
@@ -77,6 +79,12 @@ public class CarpetServer // static for now - easier to handle all around the co
                 LOG.error("Failed to start Status server:\n" + ex.getMessage());
             }
         }
+    }
+
+    public static void onServerLoadedWorlds(MinecraftServer minecraftServer)
+    {
+        extensions.forEach(e -> e.onServerLoadedWorlds(minecraftServer));
+        scriptServer.loadAllWorldScripts();
     }
 
     public static void tick(MinecraftServer server)
@@ -97,6 +105,7 @@ public class CarpetServer // static for now - easier to handle all around the co
     public static void registerCarpetCommands(CommandDispatcher<ServerCommandSource> dispatcher)
     {
         TickCommand.register(dispatcher);
+        ProfileCommand.register(dispatcher);
         CounterCommand.register(dispatcher);
         LogCommand.register(dispatcher);
         SpawnCommand.register(dispatcher);
@@ -115,28 +124,48 @@ public class CarpetServer // static for now - easier to handle all around the co
         // for all other, they will have them registered when they add themselves
         extensions.forEach(e -> e.registerCommands(dispatcher));
         currentCommandDispatcher = dispatcher;
-        //TestCommand.register(dispatcher);
+
+        if (FabricLoader.getInstance().isDevelopmentEnvironment())
+            TestCommand.register(dispatcher);
     }
 
     public static void onPlayerLoggedIn(ServerPlayerEntity player)
     {
+        ServerNetworkHandler.onPlayerJoin(player);
         LoggerRegistry.playerConnected(player);
         extensions.forEach(e -> e.onPlayerLoggedIn(player));
+
     }
 
     public static void onPlayerLoggedOut(ServerPlayerEntity player)
     {
+        ServerNetworkHandler.onPlayerLoggedOut(player);
         LoggerRegistry.playerDisconnected(player);
         extensions.forEach(e -> e.onPlayerLoggedOut(player));
     }
 
     public static void onServerClosed(MinecraftServer server)
     {
+        ServerNetworkHandler.close();
         currentCommandDispatcher = null;
-        scriptServer.onClose();
-        settingsManager.detachServer();
+        if (scriptServer != null) scriptServer.onClose();
+
         LoggerRegistry.stopLoggers();
         extensions.forEach(e -> e.onServerClosed(server));
+        minecraft_server = null;
+        disconnect();
+    }
+
+    public static void registerExtensionLoggers()
+    {
+        extensions.forEach(CarpetExtension::registerLoggers);
+    }
+
+    public static void disconnect()
+    {
+        // this for whatever reason gets called multiple times even when joining;
+        TickSpeed.reset();
+        settingsManager.detachServer();
     }
 }
 

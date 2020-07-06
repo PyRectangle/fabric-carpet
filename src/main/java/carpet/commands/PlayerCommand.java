@@ -53,7 +53,9 @@ public class PlayerCommand
                         .then(makeActionCommand("jump", EntityPlayerActionPack.ActionType.JUMP))
                         .then(makeActionCommand("attack", EntityPlayerActionPack.ActionType.ATTACK))
                         .then(makeActionCommand("drop", EntityPlayerActionPack.ActionType.DROP_ITEM))
+                        .then(makeDropCommand("drop", false))
                         .then(makeActionCommand("dropStack", EntityPlayerActionPack.ActionType.DROP_STACK))
+                        .then(makeDropCommand("dropStack", true))
                         .then(makeActionCommand("swapHands", EntityPlayerActionPack.ActionType.SWAP_HANDS))
                         .then(literal("kill").executes(PlayerCommand::kill))
                         .then(literal("shadow"). executes(PlayerCommand::shadow))
@@ -103,6 +105,19 @@ public class PlayerCommand
                 .then(literal("continuous").executes(c -> action(c, type, EntityPlayerActionPack.Action.continuous())))
                 .then(literal("interval").then(argument("ticks", IntegerArgumentType.integer(2))
                         .executes(c -> action(c, type, EntityPlayerActionPack.Action.interval(IntegerArgumentType.getInteger(c, "ticks"))))));
+    }
+
+    private static LiteralArgumentBuilder<ServerCommandSource> makeDropCommand(String actionName, boolean dropAll)
+    {
+        return literal(actionName)
+                .then(literal("all").executes(c ->manipulate(c, ap -> ap.drop(-2,dropAll))))
+                .then(literal("mainhand").executes(c ->manipulate(c, ap -> ap.drop(-1,dropAll))))
+                .then(literal("offhand").executes(c ->manipulate(c, ap -> ap.drop(40,dropAll))))
+                .then(argument("slot", IntegerArgumentType.integer(0, 40)).
+                        executes(c ->manipulate(c, ap -> ap.drop(
+                                IntegerArgumentType.getInteger(c,"slot"),
+                                dropAll
+                        ))));
     }
 
     private static Collection<String> getPlayers(ServerCommandSource source)
@@ -231,12 +246,18 @@ public class PlayerCommand
         }
         catch (CommandSyntaxException ignored) {}
         String playerName = StringArgumentType.getString(context, "player");
+        if (playerName.length()>40)
+        {
+            Messenger.m(context.getSource(), "rb Player name: "+playerName+" is too long");
+            return 0;
+        }
         MinecraftServer server = source.getMinecraftServer();
         PlayerEntity player = EntityPlayerMPFake.createFake(playerName, server, pos.x, pos.y, pos.z, facing.y, facing.x, dim, mode);
         if (player == null)
         {
             Messenger.m(context.getSource(), "rb Player " + StringArgumentType.getString(context, "player") + " doesn't exist " +
                     "and cannot spawn in online mode. Turn the server offline to spawn non-existing players");
+            return 0;
         }
         return 1;
     }
@@ -275,6 +296,14 @@ public class PlayerCommand
             Messenger.m(context.getSource(), "r Cannot shadow fake players");
             return 0;
         }
+        ServerPlayerEntity sendingPlayer = null;
+        try
+        {
+            sendingPlayer = context.getSource().getPlayer();
+        }
+        catch (CommandSyntaxException ignored) { }
+
+        if (sendingPlayer!=player && cantManipulate(context)) return 0;
         EntityPlayerMPFake.createShadow(player.server, player);
         return 1;
     }

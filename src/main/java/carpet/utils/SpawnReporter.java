@@ -186,7 +186,7 @@ public class SpawnReporter
             }
             else
             {
-                return printEntitiesByType(creature_type, worldIn);
+                return printEntitiesByType(creature_type, worldIn, true);
                 
             }
             
@@ -250,22 +250,24 @@ public class SpawnReporter
         return get_type_string(get_creature_type_from_code(str));
     }
     
-    public static List<BaseText> printEntitiesByType(EntityCategory cat, World worldIn) //Class<?> entityType)
+    public static List<BaseText> printEntitiesByType(EntityCategory cat, World worldIn, boolean all) //Class<?> entityType)
     {
         List<BaseText> lst = new ArrayList<>();
         lst.add( Messenger.s(String.format("Loaded entities for %s class:", get_type_string(cat))));
         for (Entity entity : ((ServerWorld)worldIn).getEntities(null, (e) -> e.getType().getCategory()==cat))
         {
-            if (!(entity instanceof MobEntity) || !((MobEntity)entity).isPersistent())
-            {
-                EntityType type = entity.getType();
-                BlockPos pos = entity.getBlockPos();
-                lst.add( Messenger.c(
-                        "w  - ",
-                        Messenger.tp("wb",pos),
-                        String.format("w : %s", type.getName().getString())
-                        ));
-            }
+            boolean persistent = entity instanceof MobEntity && ( ((MobEntity) entity).isPersistent() || ((MobEntity) entity).cannotDespawn());
+            if (!all && persistent)
+                continue;
+
+            EntityType type = entity.getType();
+            BlockPos pos = entity.getBlockPos();
+            lst.add( Messenger.c(
+                    "w  - ",
+                    Messenger.tp(persistent?"gb":"wb",pos),
+                    String.format(persistent?"g : %s":"w : %s", type.getName().getString())
+            ));
+
         }
         if (lst.size()==1)
         {
@@ -380,7 +382,7 @@ public class SpawnReporter
         }
         if (entity instanceof OcelotEntity)
         {
-            for (Entity e: entity.getEntityWorld().getEntities(OcelotEntity.class, entity.getBoundingBox()))
+            for (Entity e: entity.getEntityWorld().getEntities(entity, entity.getBoundingBox()))
             {
                 e.remove();
             }
@@ -388,7 +390,7 @@ public class SpawnReporter
         entity.remove();
     }
 
-    public static List<BaseText> report(BlockPos pos, World worldIn)
+    public static List<BaseText> report(BlockPos pos, ServerWorld worldIn)
     {
         List<BaseText> rep = new ArrayList<>();
         int x = pos.getX(); int y = pos.getY(); int z = pos.getZ();
@@ -434,17 +436,22 @@ public class SpawnReporter
                         {
                             float f = (float)x + 0.5F;
                             float f1 = (float)z + 0.5F;
-                            mob.setPositionAndAngles((double)f, (double)y, (double)f1, worldIn.random.nextFloat() * 360.0F, 0.0F);
+                            mob.refreshPositionAndAngles((double)f, (double)y, (double)f1, worldIn.random.nextFloat() * 360.0F, 0.0F);
                             fits1 = worldIn.doesNotCollide(mob);
+                            EntityType etype = mob.getType();
                             
                             for (int i = 0; i < 20; ++i)
                             {
-                                if (SpawnRestriction.method_20638(mob.getType(),mob.getEntityWorld(), SpawnType.NATURAL, mob.getBlockPos(), mob.getEntityWorld().random))
+                                if (
+                                        SpawnRestriction.canSpawn(etype,worldIn, SpawnType.NATURAL, pos, worldIn.random) &&
+                                        SpawnHelper.canSpawn(SpawnRestriction.getLocation(etype), worldIn, pos, etype) &&
+                                        mob.canSpawn(worldIn, SpawnType.NATURAL) // && mob.canSpawn(worldIn) // entity collisions
+                                )
                                 {
                                     will_spawn += 1;
                                 }
                             }
-                            mob.initialize(worldIn, worldIn.getLocalDifficulty(new BlockPos(mob)), SpawnType.NATURAL, null, null);
+                            mob.initialize(worldIn, worldIn.getLocalDifficulty(mob.getBlockPos()), SpawnType.NATURAL, null, null);
                             // the code invokes onInitialSpawn after getCanSpawHere
                             fits = fits1 && worldIn.doesNotCollide(mob);
                             if (fits)

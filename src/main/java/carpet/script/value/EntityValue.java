@@ -2,16 +2,22 @@ package carpet.script.value;
 
 import carpet.fakes.EntityInterface;
 import carpet.fakes.ItemEntityInterface;
+import carpet.fakes.LivingEntityInterface;
 import carpet.fakes.MobEntityInterface;
+import carpet.fakes.HungerManagerInterface;
 import carpet.helpers.Tracer;
+import carpet.patches.EntityPlayerMPFake;
 import carpet.script.CarpetContext;
 import carpet.script.EntityEventsGroup;
+import carpet.script.argument.Vector3Argument;
 import carpet.script.exception.InternalExpressionException;
 import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import net.minecraft.client.network.packet.EntityPassengersSetS2CPacket;
-import net.minecraft.client.network.packet.EntityPositionS2CPacket;
-import net.minecraft.client.network.packet.PlayerPositionLookS2CPacket;
+import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.packet.s2c.play.EntityPassengersSetS2CPacket;
+import net.minecraft.network.packet.s2c.play.EntityPositionS2CPacket;
+import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.command.EntitySelector;
 import net.minecraft.command.EntitySelectorReader;
 import net.minecraft.entity.Entity;
@@ -44,6 +50,7 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.world.GameMode;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.ArrayList;
@@ -51,14 +58,16 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
+import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static carpet.script.value.NBTSerializableValue.nameFromRegistryId;
+import static carpet.utils.MobAI.genericJump;
 
 // TODO: decide whether copy(entity) should duplicate entity in the world.
 public class EntityValue extends Value
@@ -78,11 +87,11 @@ public class EntityValue extends Value
             EntitySelector entitySelector = selectorCache.get(selector);
             if (entitySelector != null)
             {
-                return entitySelector.getEntities(source);
+                return entitySelector.getEntities(source.withMaxLevel(4));
             }
             entitySelector = new EntitySelectorReader(new StringReader(selector), true).read();
             selectorCache.put(selector, entitySelector);
-            return entitySelector.getEntities(source);
+            return entitySelector.getEntities(source.withMaxLevel(4));
         }
         catch (CommandSyntaxException e)
         {
@@ -117,7 +126,7 @@ public class EntityValue extends Value
     @Override
     public String getString()
     {
-        return entity.getDisplayName().getString();
+        return entity.getName().getString();
     }
 
     @Override
@@ -206,11 +215,11 @@ public class EntityValue extends Value
         put("removed", (entity, arg) -> new NumericValue(entity.removed));
         put("uuid",(e, a) -> new StringValue(e.getUuidAsString()));
         put("id",(e, a) -> new NumericValue(e.getEntityId()));
-        put("pos", (e, a) -> ListValue.of(new NumericValue(e.x), new NumericValue(e.y), new NumericValue(e.z)));
-        put("location", (e, a) -> ListValue.of(new NumericValue(e.x), new NumericValue(e.y), new NumericValue(e.z), new NumericValue(e.yaw), new NumericValue(e.pitch)));
-        put("x", (e, a) -> new NumericValue(e.x));
-        put("y", (e, a) -> new NumericValue(e.y));
-        put("z", (e, a) -> new NumericValue(e.z));
+        put("pos", (e, a) -> ListValue.of(new NumericValue(e.getX()), new NumericValue(e.getY()), new NumericValue(e.getZ())));
+        put("location", (e, a) -> ListValue.of(new NumericValue(e.getX()), new NumericValue(e.getY()), new NumericValue(e.getZ()), new NumericValue(e.yaw), new NumericValue(e.pitch)));
+        put("x", (e, a) -> new NumericValue(e.getX()));
+        put("y", (e, a) -> new NumericValue(e.getY()));
+        put("z", (e, a) -> new NumericValue(e.getZ()));
         put("motion", (e, a) ->
         {
             Vec3d velocity = e.getVelocity();
@@ -219,13 +228,16 @@ public class EntityValue extends Value
         put("motion_x", (e, a) -> new NumericValue(e.getVelocity().x));
         put("motion_y", (e, a) -> new NumericValue(e.getVelocity().y));
         put("motion_z", (e, a) -> new NumericValue(e.getVelocity().z));
-        put("name", (e, a) -> new StringValue(e.getDisplayName().getString()));
+        put("name", (e, a) -> new StringValue(e.getName().getString()));
+        put("display_name", (e, a) -> new StringValue(e.getDisplayName().getString()));
+        put("command_name", (e, a) -> new StringValue(e.getEntityName()));
         put("custom_name", (e, a) -> e.hasCustomName()?new StringValue(e.getCustomName().getString()):Value.NULL);
         put("type", (e, a) -> new StringValue(nameFromRegistryId(Registry.ENTITY_TYPE.getId(e.getType()))));
         put("is_riding", (e, a) -> new NumericValue(e.hasVehicle()));
         put("is_ridden", (e, a) -> new NumericValue(e.hasPassengers()));
         put("passengers", (e, a) -> ListValue.wrap(e.getPassengerList().stream().map(EntityValue::new).collect(Collectors.toList())));
         put("mount", (e, a) -> (e.getVehicle()!=null)?new EntityValue(e.getVehicle()):Value.NULL);
+        put("unmountable", (e, a) -> new NumericValue(((EntityInterface)e).isPermanentVehicle()));
         put("tags", (e, a) -> ListValue.wrap(e.getScoreboardTags().stream().map(StringValue::new).collect(Collectors.toList())));
         put("has_tag", (e, a) -> new NumericValue(e.getScoreboardTags().contains(a.getString())));
         put("yaw", (e, a)-> new NumericValue(e.yaw));
@@ -241,7 +253,7 @@ public class EntityValue extends Value
         put("immune_to_fire", (e, a) -> new NumericValue(e.isFireImmune()));
 
         put("invulnerable", (e, a) -> new NumericValue(e.isInvulnerable()));
-        put("dimension", (e, a) -> new StringValue(nameFromRegistryId(Registry.DIMENSION.getId(e.dimension))));
+        put("dimension", (e, a) -> new StringValue(nameFromRegistryId(Registry.DIMENSION_TYPE.getId(e.dimension))));
         put("height", (e, a) -> new NumericValue(e.getDimensions(EntityPose.STANDING).height));
         put("width", (e, a) -> new NumericValue(e.getDimensions(EntityPose.STANDING).width));
         put("eye_height", (e, a) -> new NumericValue(e.getStandingEyeHeight()));
@@ -250,7 +262,9 @@ public class EntityValue extends Value
         put("despawn_timer", (e, a) -> e instanceof LivingEntity?new NumericValue(((LivingEntity) e).getDespawnCounter()):Value.NULL);
         put("item", (e, a) -> (e instanceof ItemEntity)?ListValue.fromItemStack(((ItemEntity) e).getStack()):Value.NULL);
         put("count", (e, a) -> (e instanceof ItemEntity)?new NumericValue(((ItemEntity) e).getStack().getCount()):Value.NULL);
-        put("pickup_delay", (e, a) -> (e instanceof ItemEntity)?new NumericValue(((ItemEntityInterface) e).getPickupDelay()):Value.NULL);
+        put("pickup_delay", (e, a) -> (e instanceof ItemEntity)?new NumericValue(((ItemEntityInterface) e).getPickupDelayCM()):Value.NULL);
+        put("portal_cooldown", (e , a) ->new NumericValue(((EntityInterface)e).getPortalTimer()));
+        put("portal_timer", (e , a) ->new NumericValue(e.netherPortalCooldown));
         // ItemEntity -> despawn timer via ssGetAge
         put("is_baby", (e, a) -> (e instanceof LivingEntity)?new NumericValue(((LivingEntity) e).isBaby()):Value.NULL);
         put("target", (e, a) -> {
@@ -267,20 +281,39 @@ public class EntityValue extends Value
         put("home", (e, a) -> {
             if (e instanceof MobEntity)
             {
-                return (((MobEntity) e).getWalkTargetRange () > 0)?new BlockValue(null, (ServerWorld) e.getEntityWorld(), ((MobEntityWithAi) e).getWalkTarget()):Value.FALSE;
+                return (((MobEntity) e).getPositionTargetRange () > 0)?new BlockValue(null, (ServerWorld) e.getEntityWorld(), ((MobEntityWithAi) e).getPositionTarget()):Value.FALSE;
             }
             return Value.NULL;
         });
+        put("pose", (e, a) -> new StringValue(e.getPose().name().toLowerCase(Locale.ROOT)));
         put("sneaking", (e, a) -> e.isSneaking()?Value.TRUE:Value.FALSE);
         put("sprinting", (e, a) -> e.isSprinting()?Value.TRUE:Value.FALSE);
         put("swimming", (e, a) -> e.isSwimming()?Value.TRUE:Value.FALSE);
-        /*put("jumping", (e, a) -> {
+        put("persistence", (e, a) -> {
+            if (e instanceof MobEntity) return new NumericValue(((MobEntity) e).isPersistent());
+            return Value.NULL;
+        });
+        put("hunger", (e, a) -> {
+            if(e instanceof PlayerEntity) return new NumericValue(((PlayerEntity) e).getHungerManager().getFoodLevel());
+            return Value.NULL;
+        });
+        put("saturation", (e, a) -> {
+            if(e instanceof PlayerEntity) return new NumericValue(((PlayerEntity) e).getHungerManager().getSaturationLevel());
+            return Value.NULL;
+        });
+
+        put("exhaustion",(e, a)->{
+            if(e instanceof PlayerEntity) return new NumericValue(((HungerManagerInterface)((PlayerEntity) e).getHungerManager()).getExhaustionCM());
+            return Value.NULL;
+        });
+
+        put("jumping", (e, a) -> {
             if (e instanceof LivingEntity)
             {
-                return  ((LivingEntity) e).getJumping()?Value.TRUE:Value.FALSE;
+                return  ((LivingEntityInterface) e).isJumpingCM()?Value.TRUE:Value.FALSE;
             }
             return Value.NULL;
-        });*/ //needs mixing
+        });
         put("gamemode", (e, a) -> {
             if (e instanceof  ServerPlayerEntity)
             {
@@ -307,6 +340,34 @@ public class EntityValue extends Value
 
                 }
                 return new NumericValue(0);
+            }
+            return Value.NULL;
+        });
+
+        put("player_type", (e, a) -> {
+            if (e instanceof PlayerEntity)
+            {
+                if (e instanceof EntityPlayerMPFake) return new StringValue(((EntityPlayerMPFake) e).isAShadow?"shadow":"fake");
+                PlayerEntity p = (PlayerEntity)e;
+                MinecraftServer server = p.getEntityWorld().getServer();
+                if (server.isDedicated()) return new StringValue("multiplayer");
+                boolean runningLan = server.isRemote();
+                if (!runningLan) return new StringValue("singleplayer");
+                boolean isowner = server.isOwner(p.getGameProfile());
+                if (isowner) return new StringValue("lan_host");
+                return new StringValue("lan player");
+                // realms?
+            }
+            return Value.NULL;
+        });
+
+        put("team", (e, a) -> e.getScoreboardTeam()==null?Value.NULL:new StringValue(e.getScoreboardTeam().getName()));
+
+        put("ping", (e, a) -> {
+            if (e instanceof  ServerPlayerEntity)
+            {
+                ServerPlayerEntity spe = (ServerPlayerEntity) e;
+                return new NumericValue(spe.pingMilliseconds);
             }
             return Value.NULL;
         });
@@ -341,6 +402,7 @@ public class EntityValue extends Value
             StatusEffectInstance pe = ((LivingEntity) e).getStatusEffect(potion);
             return ListValue.of( new NumericValue(pe.getAmplifier()), new NumericValue(pe.getDuration()) );
         });
+
         put("health", (e, a) ->
         {
             if (e instanceof LivingEntity)
@@ -446,6 +508,8 @@ public class EntityValue extends Value
                 return new NBTSerializableValue(nbttagcompound);
             return new NBTSerializableValue(nbttagcompound).get(a);
         });
+
+        put("category",(e,a)->{return new StringValue(e.getType().getCategory().toString().toLowerCase(Locale.ROOT));});
     }};
 
     public void set(String what, Value toWhat)
@@ -459,6 +523,10 @@ public class EntityValue extends Value
         catch (NullPointerException npe)
         {
             throw new InternalExpressionException("'modify' for '"+what+"' expects a value");
+        }
+        catch (IndexOutOfBoundsException ind)
+        {
+            throw new InternalExpressionException("Wrong number of arguments for `modify` option: "+what);
         }
     }
 
@@ -474,29 +542,16 @@ public class EntityValue extends Value
             return;
         if (e instanceof ServerPlayerEntity)
         {
-            // TODO next - figure out proper way of informting client about pos changes
-            //((ServerPlayerEntity) e).networkHandler.requestTeleport(e.x, e.y, e.z, e.yaw, e.pitch);
-            Set<PlayerPositionLookS2CPacket.Flag> set_1 = EnumSet.allOf(PlayerPositionLookS2CPacket.Flag.class);
-            double prevX = e.x;
-            double prevY = e.y;
-            double prevZ = e.z;
-            float prevYaw = e.yaw;
-            float prevPitch = e.pitch;
-
-            e.setPositionAnglesAndUpdate(x, y, z, yaw, pitch);
-            ((ServerPlayerEntity) e).networkHandler.sendPacket(new PlayerPositionLookS2CPacket(
-                    x - prevX,
-                    y - prevY,
-                    z - prevZ,
-                    yaw - prevYaw,
-                    pitch - prevPitch,
-                    set_1, -1)
-            );
+            // this forces position but doesn't angles for some reason. Need both in the API in the future.
+            EnumSet<PlayerPositionLookS2CPacket.Flag> set  = EnumSet.noneOf(PlayerPositionLookS2CPacket.Flag.class);
+            set.add(PlayerPositionLookS2CPacket.Flag.X_ROT);
+            set.add(PlayerPositionLookS2CPacket.Flag.Y_ROT);
+            ((ServerPlayerEntity)e).networkHandler.teleportRequest(x, y, z, yaw, pitch, set );
         }
         else
         {
-            e.setPositionAnglesAndUpdate(x, y, z, yaw, pitch);
-            ((ServerWorld) e.getEntityWorld()).method_14178().sendToNearbyPlayers(e, new EntityPositionS2CPacket(e));
+            e.refreshPositionAndAngles(x, y, z, yaw, pitch);
+            ((ServerWorld) e.getEntityWorld()).getChunkManager().sendToNearbyPlayers(e, new EntityPositionS2CPacket(e));
         }
 
     }
@@ -507,11 +562,40 @@ public class EntityValue extends Value
         //((ServerWorld)e.getEntityWorld()).method_14178().sendToNearbyPlayers(e, new EntityVelocityUpdateS2CPacket(e));
     }
 
-
-
     private static final Map<String, BiConsumer<Entity, Value>> featureModifiers = new HashMap<String, BiConsumer<Entity, Value>>() {{
         put("remove", (entity, value) -> entity.remove());
-        put("health", (e, v) -> { if (e instanceof LivingEntity) ((LivingEntity) e).setHealth((float) NumericValue.asNumber(v).getDouble()); });
+        put("age", (e, v) -> e.age = Math.abs((int)NumericValue.asNumber(v).getLong()) );
+        put("health", (e, v) -> {
+            float health = (float) NumericValue.asNumber(v).getDouble();
+            if (health <= 0f && e instanceof ServerPlayerEntity)
+            {
+                ServerPlayerEntity player = (ServerPlayerEntity) e;
+                if (player.container != null)
+                {
+                    // if player dies with open container, then that causes NPE on the client side
+                    // its a client side bug that may never surface unless vanilla gets into scripting at some point
+                    // bug: #228
+                    player.closeContainer();
+                }
+                ((LivingEntity) e).setHealth(health);
+            }
+            if (e instanceof LivingEntity) ((LivingEntity) e).setHealth(health);
+        });
+        // todo add handling of the source for extra effects
+        /*put("damage", (e, v) -> {
+            float dmgPoints;
+            DamageSource source;
+            if (v instanceof ListValue && ((ListValue) v).getItems().size() > 1)
+            {
+                   List<Value> vals = ((ListValue) v).getItems();
+                   dmgPoints = (float) NumericValue.asNumber(v).getDouble();
+                   source = DamageSource ... yeah...
+            }
+            else
+            {
+
+            }
+        });*/
         put("kill", (e, v) -> e.kill());
         put("location", (e, v) ->
         {
@@ -545,23 +629,23 @@ public class EntityValue extends Value
         });
         put("x", (e, v) ->
         {
-            updatePosition(e, NumericValue.asNumber(v).getDouble(), e.y, e.z, e.yaw, e.pitch);
+            updatePosition(e, NumericValue.asNumber(v).getDouble(), e.getY(), e.getZ(), e.yaw, e.pitch);
         });
         put("y", (e, v) ->
         {
-            updatePosition(e, e.x, NumericValue.asNumber(v).getDouble(), e.z, e.yaw, e.pitch);
+            updatePosition(e, e.getX(), NumericValue.asNumber(v).getDouble(), e.getZ(), e.yaw, e.pitch);
         });
         put("z", (e, v) ->
         {
-            updatePosition(e, e.x, e.y, NumericValue.asNumber(v).getDouble(), e.yaw, e.pitch);
+            updatePosition(e, e.getX(), e.getY(), NumericValue.asNumber(v).getDouble(), e.yaw, e.pitch);
         });
         put("yaw", (e, v) ->
         {
-            updatePosition(e, e.x, e.y, e.z, ((float)NumericValue.asNumber(v).getDouble()) % 360, e.pitch);
+            updatePosition(e, e.getX(), e.getY(), e.getZ(), ((float)NumericValue.asNumber(v).getDouble()) % 360, e.pitch);
         });
         put("pitch", (e, v) ->
         {
-            updatePosition(e, e.x, e.y, e.z, e.yaw, MathHelper.clamp((float)NumericValue.asNumber(v).getDouble(), -90, 90));
+            updatePosition(e, e.getX(), e.getY(), e.getZ(), e.yaw, MathHelper.clamp((float)NumericValue.asNumber(v).getDouble(), -90, 90));
         });
 
         //"look"
@@ -576,9 +660,9 @@ public class EntityValue extends Value
             }
             List<Value> coords = ((ListValue) v).getItems();
             updatePosition(e,
-                    e.x + NumericValue.asNumber(coords.get(0)).getDouble(),
-                    e.y + NumericValue.asNumber(coords.get(1)).getDouble(),
-                    e.z + NumericValue.asNumber(coords.get(2)).getDouble(),
+                    e.getX() + NumericValue.asNumber(coords.get(0)).getDouble(),
+                    e.getY() + NumericValue.asNumber(coords.get(1)).getDouble(),
+                    e.getZ() + NumericValue.asNumber(coords.get(2)).getDouble(),
                     e.yaw,
                     e.pitch
             );
@@ -639,9 +723,23 @@ public class EntityValue extends Value
                 e.setCustomName(null);
                 return;
             }
-            e.setCustomNameVisible(true);
+            boolean showName = false;
+            if (v instanceof ListValue)
+            {
+                showName = ((ListValue) v).getItems().get(1).getBoolean();
+                v = ((ListValue) v).getItems().get(0);
+            }
+            e.setCustomNameVisible(showName);
             e.setCustomName(new LiteralText(v.getString()));
         });
+
+        put("persistence", (e, v) ->
+        {
+            if (!(e instanceof MobEntity)) return;
+            if (v == null) v = Value.TRUE;
+            ((MobEntityInterface)e).setPersistence(v.getBoolean());
+        });
+
         put("dismount", (e, v) -> e.stopRiding() );
         put("mount", (e, v) -> {
             if (v instanceof EntityValue)
@@ -653,6 +751,11 @@ public class EntityValue extends Value
                 ((ServerPlayerEntity)e).networkHandler.sendPacket(new EntityPassengersSetS2CPacket(e));
                 //...
             }
+        });
+        put("unmountable", (e, v) ->{
+            if (v == null)
+                v = Value.TRUE;
+            ((EntityInterface)e).setPermanentVehicle(v.getBoolean());
         });
         put("drop_passengers", (e, v) -> e.removeAllPassengers());
         put("mount_passengers", (e, v) -> {
@@ -711,7 +814,7 @@ public class EntityValue extends Value
                 throw new InternalExpressionException("'home' requires at least one position argument, and optional distance, or null to cancel");
             if (v instanceof NullValue)
             {
-                ec.setWalkTarget(BlockPos.ORIGIN, -1);
+                ec.setPositionTarget(BlockPos.ORIGIN, -1);
                 Map<String,Goal> tasks = ((MobEntityInterface)ec).getTemporaryTasks();
                 ((MobEntityInterface)ec).getAI(false).remove(tasks.get("home"));
                 tasks.remove("home");
@@ -729,30 +832,16 @@ public class EntityValue extends Value
             else if (v instanceof ListValue)
             {
                 List<Value> lv = ((ListValue) v).getItems();
-                if (lv.get(0) instanceof BlockValue)
+                Vector3Argument locator = Vector3Argument.findIn(lv, 0, false);
+                pos = new BlockPos(locator.vec.x, locator.vec.y, locator.vec.z);
+                if (lv.size() > locator.offset)
                 {
-                    pos = ((BlockValue) lv.get(0)).getPos();
-                    if (lv.size()>1)
-                    {
-                        distance = (int) NumericValue.asNumber(lv.get(1)).getLong();
-                    }
+                    distance = (int) NumericValue.asNumber(lv.get(locator.offset)).getLong();
                 }
-                else if (lv.size()>=3)
-                {
-                    pos = new BlockPos(NumericValue.asNumber(lv.get(0)).getLong(),
-                            NumericValue.asNumber(lv.get(1)).getLong(),
-                            NumericValue.asNumber(lv.get(2)).getLong());
-                    if (lv.size()>3)
-                    {
-                        distance = (int) NumericValue.asNumber(lv.get(4)).getLong();
-                    }
-                }
-                else throw new InternalExpressionException("'home' requires at least one position argument, and optional distance");
-
             }
             else throw new InternalExpressionException("'home' requires at least one position argument, and optional distance");
 
-            ec.setWalkTarget(pos, distance);
+            ec.setPositionTarget(pos, distance);
             Map<String,Goal> tasks = ((MobEntityInterface)ec).getTemporaryTasks();
             if (!tasks.containsKey("home"))
             {
@@ -778,6 +867,20 @@ public class EntityValue extends Value
             }
         });
 
+        put("portal_cooldown", (e , v) ->
+        {
+            if (v==null)
+                throw new InternalExpressionException("'portal_cooldown' requires a value to set");
+            e.netherPortalCooldown = NumericValue.asNumber(v).getInt();
+        });
+
+        put("portal_timer", (e , v) ->
+        {
+            if (v==null)
+                throw new InternalExpressionException("'portal_timer' requires a value to set");
+            ((EntityInterface) e).setPortalTimer(NumericValue.asNumber(v).getInt());
+        });
+
         put("ai", (e, v) ->
         {
             if (e instanceof MobEntity)
@@ -798,7 +901,10 @@ public class EntityValue extends Value
             if (!(e instanceof LivingEntity)) return;
             LivingEntity le = (LivingEntity)e;
             if (v == null)
-                le.clearPotionEffects();
+            {
+                le.clearStatusEffects();
+                return;
+            }
             else if (v instanceof ListValue)
             {
                 List<Value> lv = ((ListValue) v).getItems();
@@ -818,7 +924,7 @@ public class EntityValue extends Value
                     {
                         le.removeStatusEffect(effect);
                         return;
-                    } 
+                    }
                     int amplifier = 0;
                     if (lv.size() > 2)
                         amplifier = (int)NumericValue.asNumber(lv.get(2)).getLong();
@@ -828,29 +934,101 @@ public class EntityValue extends Value
                     boolean showIcon = true;
                     if (lv.size() > 4)
                         showIcon = lv.get(4).getBoolean();
-                    le.addPotionEffect(new StatusEffectInstance(effect, duration, amplifier, showParticles, showIcon));
+                    le.addStatusEffect(new StatusEffectInstance(effect, duration, amplifier, showParticles, showIcon));
                     return;
                 }
+            }
+            else
+            {
+                String effectName = v.getString();
+                StatusEffect effect = Registry.STATUS_EFFECT.get(new Identifier(effectName));
+                if (effect == null)
+                    throw new InternalExpressionException("Wrong effect name: "+effectName);
+                le.removeStatusEffect(effect);
+                return;
             }
             throw new InternalExpressionException("'effect' needs either no arguments (clear) or effect name, duration, and optional amplifier, show particles and show icon");
         });
 
-        // gamemode
-        // spectate
-        // "fire"
-        // "extinguish"
-        // "silent"
-        // "gravity"
-        // "invulnerable"
-        // "dimension"
-        // "item"
-        // "count",
-        // "age",
-        // "effect_"name
-        // "hold"
-        // "hold_offhand"
-        // "jump"
-        // "nbt" <-big one, for now use run('data merge entity ...
+        put("gamemode", (e,v)->{
+            if(!(e instanceof ServerPlayerEntity)) return;
+            GameMode toSet = v instanceof NumericValue ?
+                    GameMode.byId(((NumericValue) v).getInt(), null) :
+                    GameMode.byName(v.getString().toLowerCase(Locale.ROOT), null);
+            if (toSet != null) ((ServerPlayerEntity) e).setGameMode(toSet);
+        });
+
+        put("jumping",(e,v)->{
+            if(!(e instanceof LivingEntity)) return;
+            ((LivingEntity) e).setJumping(v.getBoolean());
+        });
+
+        put("jump",(e,v)->{
+            if (e instanceof LivingEntity)
+            {
+                ((LivingEntityInterface)e).doJumpCM();
+            }
+            else
+            {
+                genericJump(e);
+            }
+        });
+
+        put("silent",(e,v)-> e.setSilent(v.getBoolean()));
+
+        put("gravity",(e,v)-> e.setNoGravity(!v.getBoolean()));
+
+        put("invulnerable",(e,v)-> e.setInvulnerable(v.getBoolean()));
+
+        put("fire",(e,v)-> e.setFireTicks((int)NumericValue.asNumber(v).getLong()));
+
+        put("hunger", (e, v)-> {
+            if(e instanceof PlayerEntity) ((PlayerEntity) e).getHungerManager().setFoodLevel((int) NumericValue.asNumber(v).getLong());
+        });
+
+        put("exhaustion", (e, v)-> {
+            if(e instanceof PlayerEntity) ((HungerManagerInterface) ((PlayerEntity) e).getHungerManager()).setExhaustionCM(NumericValue.asNumber(v).getFloat());
+        });
+
+        put("add_exhaustion", (e, v)-> {
+            if(e instanceof PlayerEntity) ((PlayerEntity) e).getHungerManager().addExhaustion((int) NumericValue.asNumber(v).getLong());
+        });
+
+        put("saturation", (e, v)-> {
+            if(e instanceof PlayerEntity) ((PlayerEntity) e).getHungerManager().setSaturationLevelClient((float)NumericValue.asNumber(v).getLong());
+        });
+
+        put("nbt", (e, v) -> {
+            if (!(e instanceof PlayerEntity))
+            {
+                UUID uUID = e.getUuid();
+                Value tagValue = NBTSerializableValue.fromValue(v);
+                if (tagValue instanceof NBTSerializableValue)
+                {
+                    e.fromTag(((NBTSerializableValue) tagValue).getCompoundTag());
+                    e.setUuid(uUID);
+                }
+            }
+        });
+        put("nbt_merge", (e, v) -> {
+            if (!(e instanceof PlayerEntity))
+            {
+                UUID uUID = e.getUuid();
+                Value tagValue = NBTSerializableValue.fromValue(v);
+                if (tagValue instanceof NBTSerializableValue)
+                {
+                    CompoundTag nbttagcompound = e.toTag((new CompoundTag()));
+                    nbttagcompound.copyFrom(((NBTSerializableValue) tagValue).getCompoundTag());
+                    e.fromTag(nbttagcompound);
+                    e.setUuid(uUID);
+                }
+            }
+        });
+
+        // "dimension"      []
+        // "item"           []
+        // "count",         []
+        // "effect_"name    []
     }};
 
     public void setEvent(CarpetContext cc, String eventName, FunctionValue fun, List<Value> args)
@@ -859,5 +1037,15 @@ public class EntityValue extends Value
         if (event == null)
             throw new InternalExpressionException("Unknown entity event: " + eventName);
         ((EntityInterface)entity).getEventContainer().addEvent(event, cc, fun, args);
+    }
+
+    @Override
+    public Tag toTag(boolean force)
+    {
+        if (!force) throw new NBTSerializableValue.IncompatibleTypeException(this);
+        CompoundTag tag = new CompoundTag();
+        tag.put("Data", getEntity().toTag( new CompoundTag()));
+        tag.put("Name", StringTag.of(Registry.ENTITY_TYPE.getId(entity.getType()).toString()));
+        return tag;
     }
 }

@@ -1,16 +1,11 @@
 package carpet.commands;
 
 import carpet.CarpetServer;
-import carpet.script.CarpetScriptHost;
+import carpet.script.*;
 import carpet.CarpetSettings;
-import carpet.script.CarpetEventServer;
-import carpet.script.CarpetExpression;
-import carpet.script.Expression;
-import carpet.script.ExpressionInspector;
-import carpet.script.LazyValue;
-import carpet.script.Tokenizer;
 import carpet.script.exception.CarpetExpressionException;
 import carpet.script.value.FunctionValue;
+import carpet.settings.SettingsManager;
 import carpet.utils.Messenger;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -29,12 +24,10 @@ import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.util.Clearable;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.MutableIntBoundingBox;
+import net.minecraft.util.math.BlockBox;
+import org.apache.commons.lang3.StringUtils;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Locale;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -46,6 +39,33 @@ import static net.minecraft.server.command.CommandSource.suggestMatching;
 
 public class ScriptCommand
 {
+    private static TreeSet<String> scarpetFunctions;
+    private static TreeSet<String> APIFunctions;
+    static
+    {
+        Set<String> allFunctions = (new CarpetExpression(null, "null", null, null)).getExpr().getFunctionNames();
+        scarpetFunctions = new TreeSet<>(Expression.none.getFunctionNames());
+        APIFunctions = allFunctions.stream().filter(s -> !scarpetFunctions.contains(s)).collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    public static List<String> suggestFunctions(ScriptHost host, String previous, String prefix)
+    {
+        previous = previous.replace("\\'", "");
+        int quoteCount = StringUtils.countMatches(previous,'\'');
+        if (quoteCount % 2 == 1)
+            return Collections.emptyList();
+        int maxLen = prefix.length()<3 ? (prefix.length()*2+1) : 1234;
+        List<String> scarpetMatches = scarpetFunctions.stream().
+                filter(s -> s.startsWith(prefix) && s.length() <= maxLen).map(s -> s+"(").collect(Collectors.toList());
+        scarpetMatches.addAll(APIFunctions.stream().
+                filter(s -> s.startsWith(prefix) && s.length() <= maxLen).map(s -> s+"(").collect(Collectors.toList()));
+        // not that useful in commandline, more so in external scripts, so skipping here
+        //scarpetMatches.addAll(CarpetServer.scriptServer.events.eventHandlers.keySet().stream().
+        //        filter(s -> s.startsWith(prefix) && s.length() <= maxLen).map(s -> "__"+s+"(").collect(Collectors.toList()));
+        scarpetMatches.addAll(host.globaFunctionNames(host.main, s -> s.startsWith(prefix)).map(s -> s+"(").collect(Collectors.toList()));
+        scarpetMatches.addAll(host.globaVariableNames(host.main, s -> s.startsWith(prefix)).collect(Collectors.toList()));
+        return scarpetMatches;
+    }
 
     private static CompletableFuture<Suggestions> suggestCode(
             CommandContext<ServerCommandSource> context,
@@ -65,7 +85,7 @@ public class ScriptCommand
             return suggestionsBuilder.buildFuture();
         String prefix = lastToken.reverse().toString();
         String previousString =  previous.substring(0,previous.length()-prefix.length()) ;
-        ExpressionInspector.suggestFunctions(currentHost, previousString, prefix).forEach(text -> suggestionsBuilder.suggest(previousString+text));
+        suggestFunctions(currentHost, previousString, prefix).forEach(text -> suggestionsBuilder.suggest(previousString+text));
         return suggestionsBuilder.buildFuture();
     }
 
@@ -79,7 +99,7 @@ public class ScriptCommand
         LiteralArgumentBuilder<ServerCommandSource> u = literal("resume").
                 executes( (cc) -> { CarpetServer.scriptServer.stopAll = false; return 1;});
         LiteralArgumentBuilder<ServerCommandSource> l = literal("run").
-                requires((player) -> player.hasPermissionLevel(2)).
+                requires((player) -> SettingsManager.canUseCommand(player, CarpetSettings.commandScriptACE)).
                 then(argument("expr", StringArgumentType.greedyString()).suggests(ScriptCommand::suggestCode).
                         executes((cc) -> compute(
                                 cc,
@@ -205,7 +225,7 @@ public class ScriptCommand
                                                                                 BlockPredicateArgumentType.getBlockPredicate(cc, "filter"),
                                                                                 "outline"
                                                                         )))))))));
-        LiteralArgumentBuilder<ServerCommandSource> a = literal("load").requires( (player) -> player.hasPermissionLevel(2) ).
+        LiteralArgumentBuilder<ServerCommandSource> a = literal("load").requires( (player) -> SettingsManager.canUseCommand(player, CarpetSettings.commandScriptACE) ).
                 then(argument("app", StringArgumentType.word()).
                         suggests( (cc, bb) -> suggestMatching(CarpetServer.scriptServer.listAvailableModules(true),bb)).
                         executes((cc) ->
@@ -222,7 +242,7 @@ public class ScriptCommand
                                 )
                         )
                 );
-        LiteralArgumentBuilder<ServerCommandSource> f = literal("unload").requires( (player) -> player.hasPermissionLevel(2) ).
+        LiteralArgumentBuilder<ServerCommandSource> f = literal("unload").requires( (player) -> SettingsManager.canUseCommand(player, CarpetSettings.commandScriptACE) ).
                 then(argument("app", StringArgumentType.word()).
                         suggests( (cc, bb) -> suggestMatching(CarpetServer.scriptServer.modules.keySet(),bb)).
                         executes((cc) ->
@@ -231,7 +251,7 @@ public class ScriptCommand
                             return success?1:0;
                         }));
 
-        LiteralArgumentBuilder<ServerCommandSource> q = literal("event").requires( (player) -> player.hasPermissionLevel(2) ).
+        LiteralArgumentBuilder<ServerCommandSource> q = literal("event").requires( (player) -> SettingsManager.canUseCommand(player, CarpetSettings.commandScriptACE) ).
                 executes( (cc) -> listEvents(cc.getSource())).
                 then(literal("add_to").
                         then(argument("event", StringArgumentType.word()).
@@ -239,6 +259,7 @@ public class ScriptCommand
                                 then(argument("call", StringArgumentType.word()).
                                         suggests( (cc, bb) -> suggestMatching(suggestFunctionCalls(cc), bb)).
                                         executes( (cc) -> CarpetServer.scriptServer.events.addEvent(
+                                                cc.getSource(),
                                                 StringArgumentType.getString(cc, "event"),
                                                 null,
                                                 StringArgumentType.getString(cc, "call")
@@ -249,6 +270,7 @@ public class ScriptCommand
                                                 then(argument("call", StringArgumentType.word()).
                                                         suggests( (cc, bb) -> suggestMatching(suggestFunctionCalls(cc), bb)).
                                                         executes( (cc) -> CarpetServer.scriptServer.events.addEvent(
+                                                                cc.getSource(),
                                                                 StringArgumentType.getString(cc, "event"),
                                                                 StringArgumentType.getString(cc, "app"),
                                                                 StringArgumentType.getString(cc, "call")
@@ -259,16 +281,17 @@ public class ScriptCommand
                                 then(argument("call", StringArgumentType.greedyString()).
                                         suggests( (cc, bb) -> suggestMatching(CarpetEventServer.Event.byName.get(StringArgumentType.getString(cc, "event")).handler.callList.stream().map(CarpetEventServer.Callback::toString), bb)).
                                         executes( (cc) -> CarpetServer.scriptServer.events.removeEvent(
+                                                cc.getSource(),
                                                 StringArgumentType.getString(cc, "event"),
                                                 StringArgumentType.getString(cc, "call")
                                         )?1:0))));
 
 
         dispatcher.register(literal("script").
-                requires((player) -> CarpetSettings.commandScript).
+                requires((player) ->  SettingsManager.canUseCommand(player, CarpetSettings.commandScript)).
                 then(b).then(u).then(o).then(l).then(s).then(c).then(h).then(i).then(e).then(t).then(a).then(f).then(q));
         dispatcher.register(literal("script").
-                requires((player) -> CarpetSettings.commandScript).
+                requires((player) -> SettingsManager.canUseCommand(player, CarpetSettings.commandScript)).
                 then(literal("in").
                         then(argument("app", StringArgumentType.word()).
                                 suggests( (cc, bb) -> suggestMatching(CarpetServer.scriptServer.modules.keySet(), bb)).
@@ -308,7 +331,7 @@ public class ScriptCommand
                     Messenger.m(source, "w Handlers for "+event.name+": ");
                     shownEvent = true;
                 }
-                Messenger.m(source, "w  - "+c.function +(c.host==null?"":" (from "+c.host+")"));
+                Messenger.m(source, "w  - "+c.function.getString() +(c.host==null?"":" (from "+c.host+")"));
             }
         }
         return 1;
@@ -329,7 +352,7 @@ public class ScriptCommand
             }
             Expression expr = fun.getExpression();
             Tokenizer.Token tok = fun.getToken();
-            List<String> snippet = ExpressionInspector.Expression_getExpressionSnippet(tok, expr);
+            List<String> snippet = expr.getExpressionSnippet(tok);
             Messenger.m(source, "wb "+fun.fullName(),"t  defined at: line "+(tok.lineno+1)+" pos "+(tok.linepos+1));
             for (String snippetLine: snippet)
             {
@@ -426,9 +449,8 @@ public class ScriptCommand
     {
         ServerCommandSource source = context.getSource();
         CarpetScriptHost host = getHost(context);
-        MutableIntBoundingBox area = new MutableIntBoundingBox(a, b);
+        BlockBox area = new BlockBox(a, b);
         CarpetExpression cexpr = new CarpetExpression(host.main, expr, source, origin);
-
         int int_1 = area.getBlockCountX() * area.getBlockCountY() * area.getBlockCountZ();
         if (int_1 > CarpetSettings.fillLimit)
         {
@@ -476,7 +498,7 @@ public class ScriptCommand
     {
         ServerCommandSource source = context.getSource();
         CarpetScriptHost host = getHost(context);
-        MutableIntBoundingBox area = new MutableIntBoundingBox(a, b);
+        BlockBox area = new BlockBox(a, b);
         CarpetExpression cexpr = new CarpetExpression(host.main, expr, source, origin);
         int int_1 = area.getBlockCountX() * area.getBlockCountY() * area.getBlockCountZ();
         if (int_1 > CarpetSettings.fillLimit)

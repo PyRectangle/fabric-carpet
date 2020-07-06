@@ -5,6 +5,7 @@ import carpet.fakes.PistonBlockEntityInterface;
 import com.google.common.collect.Lists;
 import net.minecraft.block.*;
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.block.piston.PistonBehavior;
 import net.minecraft.block.piston.PistonHandler;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -17,6 +18,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Mixin(PistonBlock.class)
@@ -28,19 +30,6 @@ public abstract class PistonBlock_movableTEMixin extends FacingBlock
     }
     
     private ThreadLocal<List<BlockEntity>> list1_BlockEntities = new ThreadLocal<>(); //Unneccessary ThreadLocal if client and server use different PistonBlock instances
-
-    @Inject(method = "isMovable", at = @At("HEAD"), cancellable = true)
-    private static void slimeHoney(BlockState blockState_1, World world_1, BlockPos blockPos_1, Direction direction_1, boolean boolean_1, Direction direction_2, CallbackInfoReturnable<Boolean> cir)
-    {
-        if (CarpetSettings.honeySlime && direction_1 != direction_2)
-        {
-            Block block = blockState_1.getBlock();
-            if (block != Blocks.ORANGE_STAINED_GLASS && block != Blocks.SLIME_BLOCK) return;
-            Block otherBlock = world_1.getBlockState(blockPos_1.offset(direction_2.getOpposite(),1)).getBlock();
-            if (otherBlock != Blocks.ORANGE_STAINED_GLASS && otherBlock != Blocks.SLIME_BLOCK) return;
-            cir.setReturnValue(block == otherBlock);
-        }
-    }
 
     @Inject(method = "isMovable", at = @At(value = "RETURN", ordinal = 3, shift = At.Shift.BEFORE))
     private static void movableCMD(BlockState blockState_1, World world_1, BlockPos blockPos_1,
@@ -74,12 +63,23 @@ public abstract class PistonBlock_movableTEMixin extends FacingBlock
             return !(CarpetSettings.movableBlockEntities && isPushableBlockEntity(block));
         }
     }
+
+    @Redirect(method = "isMovable", at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/block/BlockState;getPistonBehavior()Lnet/minecraft/block/piston/PistonBehavior;"
+    ))
+    private static PistonBehavior moveGrindstones(BlockState blockState)
+    {
+        if (CarpetSettings.movableBlockEntities && blockState.getBlock() == Blocks.GRINDSTONE) return PistonBehavior.NORMAL;
+        return blockState.getPistonBehavior();
+    }
+
     @Inject(method = "move", at = @At(value = "INVOKE", shift = At.Shift.BEFORE,
             target = "Ljava/util/List;size()I", ordinal = 4),locals = LocalCapture.CAPTURE_FAILHARD)
     private void onMove(World world_1, BlockPos blockPos_1, Direction direction_1, boolean boolean_1,
-                        CallbackInfoReturnable<Boolean> cir, BlockPos blockPos_2, PistonHandler pistonHandler_1,
+                        CallbackInfoReturnable<Boolean> cir, BlockPos blockPos_2, PistonHandler pistonHandler_1, Map map_1,
                         List<BlockPos> list_1, List<BlockState> list_2, List list_3, int int_2, BlockState[] blockStates_1,
-                        Direction direction_2, Set set_1)
+                        Direction direction_2)
     {
         //Get the blockEntities and remove them from the world before any magic starts to happen
         if (CarpetSettings.movableBlockEntities)
@@ -106,8 +106,8 @@ public abstract class PistonBlock_movableTEMixin extends FacingBlock
                              "Lnet/minecraft/block/entity/BlockEntity;)V", ordinal = 0),
             locals = LocalCapture.CAPTURE_FAILHARD)
     private void setBlockEntityWithCarried(World world_1, BlockPos blockPos_1, Direction direction_1, boolean boolean_1,
-                                           CallbackInfoReturnable<Boolean> cir, BlockPos blockPos_2, PistonHandler pistonHandler_1, List list_1,
-                                           List list_2, List list_3, int int_2, BlockState[] blockStates_1, Direction direction_2, Set set_1,
+                                           CallbackInfoReturnable<Boolean> cir, BlockPos blockPos_2, PistonHandler pistonHandler_1, Map map_1, List list_1,
+                                           List list_2, List list_3, int int_2, BlockState[] blockStates_1, Direction direction_2,
                                            int int_3, BlockPos blockPos_4, BlockState blockState_1)
     {
         BlockEntity blockEntityPiston = PistonExtensionBlock.createBlockEntityPiston((BlockState) list_2.get(int_3),
