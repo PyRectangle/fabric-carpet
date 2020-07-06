@@ -24,11 +24,8 @@ jobs:
       run: chmod +x gradlew
     - name: Build with Gradle
       run: ./gradlew build
-    - name: FTP upload
-      uses: SamKirkland/FTP-Deploy-Action@3.1.1
+    - name: Publish
+      uses: actions/upload-artifact@v2
       with:
-        ftp-server: sftp://us-ny-04-3900x.dedicatedmc.io:7767/carpet-builds
-        ftp-username: ${{ secrets.FTP_USER }}
-        ftp-password: ${{ secrets.FTP_PASS }}
-        local-dir: ./build/libs
-        git-ftp-args: --dry-run --insecure
+        name: carpet
+        path: ./build/libs/
