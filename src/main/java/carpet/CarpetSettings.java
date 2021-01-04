@@ -710,4 +710,83 @@ public class CarpetSettings
             category = {EXPERIMENTAL}
     )
     public static boolean y0DragonEggBedrockBreaking = false;
+
+    public static class LightBatchValidator extends Validator<Integer> {
+        public static void applyLightBatchSizes()
+        {
+            ServerWorld overworld = CarpetServer.minecraft_server.getWorld(DimensionType.OVERWORLD); // Overworld
+            if (overworld != null) {
+                overworld.getChunkManager().getLightingProvider().setTaskBatchSize(lightBatchSizeOverworld);
+            }
+
+            ServerWorld nether = CarpetServer.minecraft_server.getWorld(DimensionType.THE_NETHER); // Nether
+            if (nether != null) {
+                nether.getChunkManager().getLightingProvider().setTaskBatchSize(lightBatchSizeNether);
+            }
+
+            ServerWorld end = CarpetServer.minecraft_server.getWorld(DimensionType.THE_END); // End
+            if (end != null) {
+                end.getChunkManager().getLightingProvider().setTaskBatchSize(lightBatchSizeEnd);
+            }
+        }
+        @Override public Integer validate(ServerCommandSource source, ParsedRule<Integer> currentRule, Integer newValue, String string) {
+            if (source == null) return newValue;
+            if (newValue < 0)
+            {
+                Messenger.m(source, "r light batch size has to be at least 0");
+                return null;
+            }
+            if (currentRule.get().intValue() == newValue.intValue())
+            {
+                //must been some startup thing
+                return newValue;
+            }
+            if (CarpetServer.minecraft_server == null) return newValue;
+
+            // Set the field before we apply.
+            try
+            {
+                currentRule.field.set(null, newValue.intValue());
+            }
+            catch (IllegalAccessException e)
+            {
+                Messenger.m(source, "r Unable to access setting for  "+currentRule.name);
+                return null;
+            }
+
+            applyLightBatchSizes(); // Apply new settings
+
+            return newValue;
+        }
+    }
+
+    @Rule(
+            desc = "Changes maximum light tasks batch size for the Overworld",
+            extra = {"Allows for a higher light suppression tolerance", "setting it to 5 - Default limit defined by the game"},
+            category = {EXPERIMENTAL, OPTIMIZATION},
+            strict = false,
+            options = {"5", "50", "100", "200"},
+            validate = LightBatchValidator.class
+    )
+    public static int lightBatchSizeOverworld = 5;
+
+    @Rule(
+            desc = "Changes maximum light tasks batch size for the Nether",
+            extra = {"Allows for a higher light suppression tolerance", "setting it to 5 - Default limit defined by the game"},
+            category = {EXPERIMENTAL, OPTIMIZATION},
+            strict = false,
+            options = {"5", "50", "100", "200"},
+            validate = LightBatchValidator.class
+    )
+    public static int lightBatchSizeNether = 5;
+
+    @Rule(
+            desc = "Changes maximum light tasks batch size for the End",
+            extra = {"Allows for a higher light suppression tolerance", "setting it to 5 - Default limit defined by the game"},
+            category = {EXPERIMENTAL, OPTIMIZATION},
+            strict = false,
+            options = {"5", "50", "100", "200"},
+            validate = LightBatchValidator.class
+    )
+    public static int lightBatchSizeEnd = 5;
 }

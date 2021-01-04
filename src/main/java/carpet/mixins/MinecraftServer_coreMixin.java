@@ -54,5 +54,7 @@ public abstract class MinecraftServer_coreMixin
     {
         if (CarpetSettings.spawnChunksSize != 11)
             CarpetSettings.ChangeSpawnChunksValidator.changeSpawnSize(CarpetSettings.spawnChunksSize);
+
+        CarpetSettings.LightBatchValidator.applyLightBatchSizes();
     }
 }
