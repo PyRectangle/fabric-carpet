@@ -5,14 +5,21 @@ import carpet.fakes.ItemEntityInterface;
 import carpet.fakes.LivingEntityInterface;
 import carpet.fakes.MobEntityInterface;
 import carpet.fakes.HungerManagerInterface;
+import carpet.fakes.ServerPlayerInteractionManagerInterface;
 import carpet.helpers.Tracer;
 import carpet.patches.EntityPlayerMPFake;
 import carpet.script.CarpetContext;
 import carpet.script.EntityEventsGroup;
 import carpet.script.argument.Vector3Argument;
 import carpet.script.exception.InternalExpressionException;
+import com.google.common.collect.ImmutableMap;
 import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import net.minecraft.entity.EntityCategory;
+import net.minecraft.entity.EntityGroup;
+import net.minecraft.entity.ai.brain.MemoryModuleType;
+import net.minecraft.entity.ai.pathing.Path;
+import net.minecraft.entity.projectile.Projectile;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.packet.s2c.play.EntityPassengersSetS2CPacket;
@@ -60,6 +67,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -187,20 +195,60 @@ public class EntityValue extends Value
         return res; //TODO add more here like search by tags, or type
         //if (who.startsWith('tag:'))
     }
+
+    private static Map<String, EntityGroup> entityGroupMap = ImmutableMap.of(
+            "undead", EntityGroup.UNDEAD,
+            "arthropod", EntityGroup.ARTHROPOD,
+            "aquatic", EntityGroup.AQUATIC,
+            "regular", EntityGroup.DEFAULT,
+            "illager", EntityGroup.ILLAGER
+    );
+
     private static final Map<String, Pair<EntityType<?>, Predicate<? super Entity>>> entityPredicates =
             new HashMap<String, Pair<EntityType<?>, Predicate<? super Entity>>>()
     {{
-        put("*", Pair.of(null, EntityPredicates.VALID_ENTITY));
+        put("*", Pair.of(null, e -> true));
+        put("valid", Pair.of(null, EntityPredicates.VALID_ENTITY));
+        put("!valid", Pair.of(null, e -> !e.isAlive()));
+
         put("living", Pair.of(null, (e) -> e instanceof LivingEntity && e.isAlive()));
-        put("items", Pair.of(EntityType.ITEM, EntityPredicates.VALID_ENTITY));
-        put("players", Pair.of(EntityType.PLAYER, EntityPredicates.VALID_ENTITY));
-        put("!players", Pair.of(null, (e) -> !(e instanceof PlayerEntity) ));
+        put("!living", Pair.of(null, (e) -> !(e instanceof LivingEntity) && e.isAlive()));
+
+        put("projectile", Pair.of(null, (e) -> e instanceof Projectile && e.isAlive()));
+        put("!projectile", Pair.of(null, (e) -> !(e instanceof Projectile) && e.isAlive()));
+
+        for (String groupStr : entityGroupMap.keySet())
+        {
+            EntityGroup group = entityGroupMap.get(groupStr);
+            put(    groupStr, Pair.of(null,  e -> ((e instanceof LivingEntity) && ((LivingEntity) e).getGroup() == group && e.isAlive())));
+            put("!"+groupStr, Pair.of(null,  e -> ((e instanceof LivingEntity) && ((LivingEntity) e).getGroup() != group && e.isAlive())));
+        }
+        for (Identifier typeId : Registry.ENTITY_TYPE.getIds())
+        {
+            EntityType type  = Registry.ENTITY_TYPE.get(typeId);
+            String mobType = ValueConversions.simplify(typeId);
+            put(    mobType, Pair.of(type, EntityPredicates.VALID_ENTITY));
+            put("!"+mobType, Pair.of(null, (e) -> e.getType() != type  && e.isAlive()));
+        }
+        for (EntityCategory catId : EntityCategory.values())
+        {
+            String catStr = catId.getName();
+            put(    catStr, Pair.of(null, e -> (e.getType().getCategory() == catId) && e.isAlive()));
+            put("!"+catStr, Pair.of(null, e -> (e.getType().getCategory() != catId) && e.isAlive()));
+        }
     }};
     public Value get(String what, Value arg)
     {
         if (!(featureAccessors.containsKey(what)))
             throw new InternalExpressionException("Unknown entity feature: "+what);
-        return featureAccessors.get(what).apply(entity, arg);
+        try
+        {
+            return featureAccessors.get(what).apply(entity, arg);
+        }
+        catch (NullPointerException npe)
+        {
+            throw new InternalExpressionException("Cannot fetch '"+what+"' with these arguments");
+        }
     }
     private static final Map<String, EquipmentSlot> inventorySlots = new HashMap<String, EquipmentSlot>(){{
         put("mainhand", EquipmentSlot.MAINHAND);
@@ -210,6 +258,7 @@ public class EntityValue extends Value
         put("legs", EquipmentSlot.LEGS);
         put("feet", EquipmentSlot.FEET);
     }};
+
     private static final Map<String, BiFunction<Entity, Value, Value>> featureAccessors = new HashMap<String, BiFunction<Entity, Value, Value>>() {{
         //put("test", (e, a) -> a == null ? Value.NULL : new StringValue(a.getString()));
         put("removed", (entity, arg) -> new NumericValue(entity.removed));
@@ -228,6 +277,7 @@ public class EntityValue extends Value
         put("motion_x", (e, a) -> new NumericValue(e.getVelocity().x));
         put("motion_y", (e, a) -> new NumericValue(e.getVelocity().y));
         put("motion_z", (e, a) -> new NumericValue(e.getVelocity().z));
+        put("on_ground", (e, a) -> new NumericValue(e.onGround));
         put("name", (e, a) -> new StringValue(e.getName().getString()));
         put("display_name", (e, a) -> new StringValue(e.getDisplayName().getString()));
         put("command_name", (e, a) -> new StringValue(e.getEntityName()));
@@ -318,6 +368,30 @@ public class EntityValue extends Value
             if (e instanceof  ServerPlayerEntity)
             {
                 return new StringValue(((ServerPlayerEntity) e).interactionManager.getGameMode().getName());
+            }
+            return Value.NULL;
+        });
+
+        put("path", (e, a) -> {
+            if (e instanceof MobEntity)
+            {
+                Path path = ((MobEntity)e).getNavigation().getCurrentPath();
+                if (path == null) return Value.NULL;
+                return ValueConversions.fromPath((ServerWorld)e.getEntityWorld(), path);
+            }
+            return Value.NULL;
+        });
+
+        put("brain", (e, a) -> {
+            String module = a.getString();
+            MemoryModuleType<?> moduleType = Registry.MEMORY_MODULE_TYPE.get(new Identifier(module));
+            if (moduleType == MemoryModuleType.DUMMY) return Value.NULL;
+            if (e instanceof LivingEntity)
+            {
+                LivingEntity livingEntity = (LivingEntity)e;
+                Optional<?> memory = livingEntity.getBrain().getOptionalMemory(moduleType);
+                if (memory==null || !memory.isPresent()) return Value.NULL;
+                return ValueConversions.fromEntityMemory(e, memory.get());
             }
             return Value.NULL;
         });
@@ -429,8 +503,31 @@ public class EntityValue extends Value
         put("selected_slot", (e, a) -> {
            if (e instanceof PlayerEntity)
                return new NumericValue(((PlayerEntity) e).inventory.selectedSlot);
-           return null;
+           return Value.NULL;
         });
+
+        put("active_block", (e, a) -> {
+            if (e instanceof ServerPlayerEntity)
+            {
+                ServerPlayerInteractionManagerInterface manager = (ServerPlayerInteractionManagerInterface) (((ServerPlayerEntity) e).interactionManager);
+                BlockPos pos = manager.getCurrentBreakingBlock();
+                if (pos == null) return Value.NULL;
+                return new BlockValue(null, ((ServerPlayerEntity) e).getServerWorld(), pos);
+            }
+            return Value.NULL;
+        });
+
+        put("breaking_progress", (e, a) -> {
+            if (e instanceof ServerPlayerEntity)
+            {
+                ServerPlayerInteractionManagerInterface manager = (ServerPlayerInteractionManagerInterface) (((ServerPlayerEntity) e).interactionManager);
+                int progress = manager.getCurrentBlockBreakingProgress();
+                if (progress < 0) return Value.NULL;
+                return new NumericValue(progress);
+            }
+            return Value.NULL;
+        });
+
 
         put("facing", (e, a) -> {
             int index = 0;
@@ -996,6 +1093,15 @@ public class EntityValue extends Value
 
         put("saturation", (e, v)-> {
             if(e instanceof PlayerEntity) ((PlayerEntity) e).getHungerManager().setSaturationLevelClient((float)NumericValue.asNumber(v).getLong());
+        });
+
+        put("breaking_progress", (e, a) -> {
+            if (e instanceof ServerPlayerEntity)
+            {
+                int progress = (a == null || a == Value.NULL)?-1:NumericValue.asNumber(a).getInt();
+                ServerPlayerInteractionManagerInterface manager = (ServerPlayerInteractionManagerInterface) (((ServerPlayerEntity) e).interactionManager);
+                manager.setBlockBreakingProgress(progress);
+            }
         });
 
         put("nbt", (e, v) -> {

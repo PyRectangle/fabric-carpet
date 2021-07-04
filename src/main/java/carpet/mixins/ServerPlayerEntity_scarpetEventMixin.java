@@ -48,9 +48,9 @@ public abstract class ServerPlayerEntity_scarpetEventMixin extends PlayerEntity
         {
             Hand hand = getActiveHand();
             ItemStack stack = getActiveItem().copy();
+            PLAYER_FINISHED_USING_ITEM.onItemAction((ServerPlayerEntity) (Object)this, hand, stack);
             // do vanilla
             super.consumeItem();
-            PLAYER_FINISHED_USING_ITEM.onItemAction((ServerPlayerEntity) (Object)this, hand, stack);
         }
         else
         {
@@ -68,7 +68,7 @@ public abstract class ServerPlayerEntity_scarpetEventMixin extends PlayerEntity
     @Inject(method = "onDeath", at = @At("HEAD"))
     private void onDeathEvent(DamageSource source, CallbackInfo ci)
     {
-        ((EntityInterface)this).getEventContainer().onEvent(EntityEventsGroup.EntityEventType.ON_DEATH, this, source.name);
+        ((EntityInterface)this).getEventContainer().onEvent(EntityEventsGroup.EntityEventType.ON_DEATH, source.name);
         if (PLAYER_DIES.isNeeded())
         {
             PLAYER_DIES.onPlayerEvent((ServerPlayerEntity) (Object)this);

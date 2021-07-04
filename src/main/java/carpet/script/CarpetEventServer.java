@@ -1,6 +1,7 @@
 package carpet.script;
 
 import carpet.CarpetServer;
+import carpet.CarpetSettings;
 import carpet.script.exception.InternalExpressionException;
 import carpet.script.value.BlockValue;
 import carpet.script.value.EntityValue;
@@ -86,21 +87,33 @@ public class CarpetEventServer
             this.dueTime = dueTime;
         }
 
+        /**
+         * used in scheduled calls
+         */
         public void execute()
         {
             CarpetServer.scriptServer.runas(ctx.origin, ctx.s, host, function, lazify(args));
         }
 
-        public void execute(List<Value> args)
+        /**
+         * Used in entity events
+         * @param asSource - entity command source
+         * @param args = options
+         */
+        public void execute(ServerCommandSource asSource, List<Value> args)
         {
             if (this.args == null || this.args.isEmpty())
-                CarpetServer.scriptServer.runas(ctx.origin, ctx.s, host, function, lazify(args));
+                CarpetServer.scriptServer.runas(
+                        ctx.origin, asSource.withLevel(CarpetSettings.runPermissionLevel),
+                        host, function, lazify(args));
             else
             {
                 List<Value> combinedArgs = new ArrayList<>();
                 combinedArgs.addAll(args);
                 combinedArgs.addAll(this.args);
-                CarpetServer.scriptServer.runas(ctx.origin, ctx.s, host, function, lazify(combinedArgs));
+                CarpetServer.scriptServer.runas(
+                        ctx.origin, asSource.withLevel(CarpetSettings.runPermissionLevel),
+                        host, function, lazify(combinedArgs));
             }
         }
         private List<LazyValue> lazify(List<Value> args)
@@ -180,7 +193,7 @@ public class CarpetEventServer
 
         public void removeEventCall(String hostName, String funName)
         {
-            callList.removeIf((c)->  c.function.getString().equals(funName) && ( hostName == null || c.host.equalsIgnoreCase(hostName) ) );
+            callList.removeIf((c)->  c.function.getString().equals(funName) && ( hostName == c.host || (c.host != null && c.host.equalsIgnoreCase(hostName) )) );
         }
 
         public void removeAllCalls(String hostName)
@@ -517,6 +530,14 @@ public class CarpetEventServer
                             ((c, t) -> new NumericValue(to))
                     );
                 }, player::getCommandSource);
+            }
+        },
+        PLAYER_SWAPS_HANDS("player_swaps_hands", 1, false)
+        {
+            @Override
+            public void onPlayerEvent(ServerPlayerEntity player)
+            {
+                handler.call( () -> Collections.singletonList(((c, t) -> new EntityValue(player))), player::getCommandSource);
             }
         },
         PLAYER_TAKES_DAMAGE("player_takes_damage", 4, false)

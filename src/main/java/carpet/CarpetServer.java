@@ -13,7 +13,7 @@ import carpet.network.PluginChannelManager;
 import carpet.network.channels.StructureChannel;
 import carpet.script.CarpetScriptServer;
 import carpet.settings.SettingsManager;
-import carpet.utils.HUDController;
+import carpet.logging.HUDController;
 import carpet.utils.MobAI;
 import carpet.utils.ServerStatus;
 import com.mojang.brigadier.CommandDispatcher;

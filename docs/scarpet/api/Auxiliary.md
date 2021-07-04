@@ -75,13 +75,36 @@ Optional shared shape attributes:
  * `snap` - if `follow` is present, indicated on which axis the snapping to entity coordinates occurs, and which axis
    will be treated statically, i.e. the coordinate passed in a coord triple is the actual value in the world. Default
    value is `'xyz'`, meaning the shape will be drawn relatively to the entity in all three directions. Using `xz` for 
-   instance makes so that the shape follows the entity, but stays at the same, absolute Y coordinate.
+   instance makes so that the shape follows the entity, but stays at the same, absolute Y coordinate. Preceeding an axis
+   with `d`, like `dxdydz` would make so that entity position is treated discretely (rounded down).
 
 Available shapes:
- * `'line'` - draws a straight line between two points
+ * `'line'` - draws a straight line between two points.
    * Required attributes:
      * `from` - triple coordinates, entity, or block value indicating one end of the line
      * `to` - other end of the line, same format as `from`
+     
+ * `'label'` - draws a text in the world. Default `line` attribute controls main font color.
+      `fill` controls the color of the background. 
+   * Required attributes:
+     * `pos` - position
+     * `text` - string or formatted text to display
+   * Optional attributes
+     * `value` - string or formatted text to display instead of the main `text`. `value` unlike `text`
+     is not used to determine uniqueness of the drawn text so can be used to 
+     display smoothly dynamic elements where value of an element is constantly
+     changing and updates to it are being sent from the server.
+     * `size` - float. Default font size is 10.
+     * `facing` - text direction, where its facing. Possible options are: `player` (default, text
+     always rotates to face the player), `north`, `south`, `east`, `west`, `up`, `down`
+     * `doublesided` - if `true` it will make the text visible from the back as well. Default is `false` (1.16+)
+     * `align` - text alignment with regards to `pos`. Default is `center` (displayed text is
+     centered with respect to `pos`), `left` (`pos` indicates beginning of text), and `right` (`pos`
+     indicates the end of text).
+     * `tilt` - additional rotation of the text on the canvas
+     * `indent`, `height`, `raise` - offsets for text rendering on X (`indent`), Y (`height`), and Z axis (`raise`) 
+     with regards to the plane of the text. One unit of these corresponds to 1 line spacing, which
+     can be used to display multiple lines of text bound to the same `pos` 
      
  * `'box'` - draws a box with corners in specified points
    * Required attributes:
@@ -105,11 +128,21 @@ Available shapes:
      * `height` - height of the cyllinder, defaults to `0`, so flat disk. Can be negative.
      * `level` - level of details, see `'sphere'`.
 
-### `create_marker(text, pos, rotation?, block?)`
+### `create_marker(text, pos, rotation?, block?, interactive?)`
 
 Spawns a (permanent) marker entity with text or block at position. Returns that entity for further manipulations. 
 Unloading the app that spawned them will cause all the markers from the loaded portion of the world to be removed. 
-Also, if the game loads that marker in the future and the app is not loaded, it will be removed as well.
+Also, if the game loads that marker in the future and the app is not loaded, it will be removed as well. 
+
+If `interactive` (`true` by default) is `false`, the armorstand will be a marker and would not be interactive in any
+gamemode. But blocks can be placed inside markers and will not catch any interaction events. 
+
+Y Position of a marker text or block will be adjusted to make blocks or text appear at the specified position. 
+This makes so that actual armorstand position may be offset on Y axis. You would need to adjust your entity
+locations if you plan to move the armorstand around after the fact. If both text and block are specified - one of them
+will be aligned (armorstand type markers text shows up at their feet, while for regular armorstands - above the head,
+while block on the head always render in the same position regardless if its a marker or not).
+
 
 ### `remove_all_markers()`
 

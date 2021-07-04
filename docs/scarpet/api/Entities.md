@@ -29,21 +29,47 @@ but obviously using UUIDs takes more memory and compute.
 Returns global lists of entities in the current dimension of a specified type. Currently the following 
 selectors are available:
 
-*   `*`: all entites
-*   `living`
-*   `items`
-*   `players`
-*   `!players`
+*  `*`: all entities, even `!valid`
+*  `valid` - all entities that are not dead (health > 0). All main categories below also return only 
+entities in the `valid` category.
+*  `living` - all entities that resemble a creature of any sort
+*  `projectile` - all entities that are not living that can be throw or projected
+*  `undead`, `arthropod`, `aquatic`, `regular`, `illager` - all entities that belong to any of these groups. Every 
+living entity belongs to one and only one of these.
+*  `monster`, `creature`, `ambient`, `water_creature`, `water_ambient`, `misc` - another categorization of 
+living entities based on their spawn group.
+*  Any of the following standard entity types (equivalent to selection from `/summon` vanilla command: 
+`area_effect_cloud`, `armor_stand`, `arrow`, `bat`, `bee`, `blaze`, `boat`, `cat`, `cave_spider`, `chest_minecart`, 
+`chicken`, `cod`, `command_block_minecart`, `cow`, `creeper`, `dolphin`, `donkey`, `dragon_fireball`, `drowned`, 
+`egg`, `elder_guardian`, `end_crystal`, `ender_dragon`, `ender_pearl`, `enderman`, `endermite`, `evoker`, 
+`evoker_fangs`, `experience_bottle`, `experience_orb`, `eye_of_ender`, `falling_block`, `fireball`, `firework_rocket`, 
+`fishing_bobber`, `fox`, `furnace_minecart`, `ghast`, `giant`, `guardian`, `hoglin`, `hopper_minecart`, `horse`, 
+`husk`, `illusioner`, `iron_golem`, `item`, `item_frame`, `leash_knot`, `lightning_bolt`, `llama`, `llama_spit`, 
+`magma_cube`, `minecart`, `mooshroom`, `mule`, `ocelot`, `painting`, `panda`, `parrot`, `phantom`, `pig`, `piglin`, 
+`piglin_brute`, `pillager`, `player`, `polar_bear`, `potion`, `pufferfish`, `rabbit`, `ravager`, `salmon`, `sheep`, 
+`shulker`, `shulker_bullet`, `silverfish`, `skeleton`, `skeleton_horse`, `slime`, `small_fireball`, `snow_golem`, 
+`snowball`, `spawner_minecart`, `spectral_arrow`, `spider`, `squid`, `stray`, `strider`, `tnt`, `tnt_minecart`, 
+`trader_llama`, `trident`, `tropical_fish`, `turtle`, `vex`, `villager`, `vindicator`, `wandering_trader`, `witch`, 
+`wither`, `wither_skeleton`, `wither_skull`, `wolf`, `zoglin`, `zombie`, `zombie_horse`, `zombie_villager`, 
+`zombified_piglin`
+
+All categories can be preceded with `'!'` which will fetch all entities that are valid (health > 0) but not 
+belonging to that group. Calls to `entity_list` always fetch entities from the current world that the script executes. 
 
 ### `entity_area(type, cx, cy, cz, dx, dy, dz)`
 
 Returns entities of a specified type in an area centered on `cx, cy, cz` and at most `dx, dy, dz` blocks away from 
 the center point. Uses the same selectors as `entities_list`.
 
+entity_area is simpler than `entity_selector` and runs about 20% faster, but is limited to predefined selectors and 
+cuboid search area.
+
 ### `entity_selector(selector)`
 
 Returns entities satisifying given vanilla entity selector. Most complex among all the methods of selecting entities, 
-but the most capable. Selectors are cached so it should be as fast as other methods of selecting entities.
+but the most capable. Selectors are cached so it should be as fast as other methods of selecting entities. Unlike other
+entities fetching / filtering method, this one doesn't guarantee to return entities from current dimension, since
+selectors can return any loaded entity in the world.
 
 ### `spawn(name, pos, nbt?)`
 
@@ -107,11 +133,17 @@ Returns a 3d vector where the entity is looking.
 
 ### `query(e, 'motion')`
 
-Triple of entity's motion vector, `l(motion_x, motion_y, motion_z)`
+Triple of entity's motion vector, `l(motion_x, motion_y, motion_z)`. Motion represents the velocity from all the forces
+that exert on the given entity. Things that are not 'forces' like voluntary movement, or reaction from the ground are
+not part of said forces.
 
 ### `query(e, 'motion_x'), query(e, 'motion_y'), query(e, 'motion_z')`
 
 Respective component of the entity's motion vector
+
+### `query(e, 'on_ground')`
+
+Returns `true` if en entity is standing on firm ground and falling down due to that.
 
 ### `query(e, 'name'), query(e, 'display_name'), query(e, 'custom_name'), query(e, 'type')`
 
@@ -123,12 +155,12 @@ query(e,'custom_name')  => null
 query(e,'type')  => villager
 </pre>
 
-## `query(e, 'command_name')`
+### `query(e, 'command_name')`
 
 Returns a valid string to be used in commands to address an entity. Its UUID for all entities except
 player, where its their name.
 
-## `query(e, 'persistence')`
+### `query(e, 'persistence')`
 
 Returns if a mob has a persistence tag or not. Returns `null` for non-mob entities.
 
@@ -240,6 +272,11 @@ Returns mob's attack target or null if none or not applicable.
 
 Returns creature's home position or null if none or not applicable.
 
+### `query(e, 'path')`
+
+Returns path of the entity if present, `null` otherwise. The path comprises of list of nodes, each is a list
+of block value, node type, penalty, and a boolean indicated if the node has been visited.
+
 ### `query(e, 'pose')`
 
 Returns a pose of an entity, one of the following options
@@ -342,6 +379,53 @@ If `slot` is not specified, it defaults to the main hand.
 
 Number indicating the selected slot of entity's inventory. Currently only applicable to players.
 
+### `query(e, 'active_block')`
+
+Returns currently mined block by the player, as registered by the game server.
+
+### `query(e, 'breaking_progress')`
+
+Returns current breaking progress of a current player mining block, or `null`, if no block is mined.
+Breaking progress, it not null, is any number 0 or above, while 10 means that the block should already be 
+broken by the client. This value may tick above 10, if the client / connection is lagging
+
+Example:
+
+The following program provides custom breaking times, including nice block breaking animations, including instamine, for
+blocks that otherwise would take longer to mine.
+
+[Video demo](https://youtu.be/zvEEuGxgCio)
+```py
+global_blocks = {
+  'oak_planks' -> 0,
+  'obsidian' -> 1,
+  'end_portal_frame' -> 5,
+  'bedrock' -> 10
+};
+  
+__on_player_clicks_block(player, block, face) ->
+(
+   step = global_blocks:str(block);
+   if (step == 0,
+      destroy(block, -1); // instamine
+   , step != null,
+      schedule(0, '_break', player, pos(block), str(block), step, 0);
+   )
+);
+
+_break(player, pos, name, step, lvl) ->
+(
+   current = player~'active_block';
+   if (current != name || pos(current) != pos, 
+      modify(player, 'breaking_progress', null);
+   ,
+      modify(player, 'breaking_progress', lvl);
+      if (lvl >= 10, destroy(pos, -1));
+      schedule(step, '_break', player, pos, name, step, lvl+1)
+   );
+)
+```
+
 ### `query(e, 'facing', order?)`
 
 Returns where the entity is facing. optional order (number from 0 to 5, and negative), indicating primary directions 
@@ -358,6 +442,38 @@ entities and blocks, blocks will take over the priority even if transparent or n
 
 Regardless of the options selected, the result could be `null` if nothing is in reach, entity, if look targets an
 entity, and block value if block is in reach.
+
+### `query(e, 'brain', memory)`
+
+Retrieves brain memory for entity. Possible memory units highly depend on the game version. Brain is availalble
+for villagers (1.15+) and Piglins, Hoglins, Zoglins and Piglin Brutes (1.16+). If memory is not present or 
+not available for the entity, `null` is returned.
+
+Type of the returned value (entity, position, number, list of things, etc) depends on the type of the requested
+memory. On top of that, since 1.16, memories can have expiry - in this case the value is returned as a list of whatever
+was there, and the current ttl in ticks.
+
+Available retrievable memories for 1.15.2:
+* `home`, `job_site`, `meeting_point`, `secondary_job_site`, `mobs`, `visible_mobs`, `visible_villager_babies`,
+`nearest_players`, `nearest_visible_player`, `walk_target`, `look_target`, `interaction_target`,
+`breed_target`, `path`, `interactable_doors`, `opened_doors`, `nearest_bed`, `hurt_by`, `hurt_by_entity`,
+`nearest_hostile`, `hiding_place`, `heard_bell_time`, `cant_reach_walk_target_since`,
+`golem_last_seen_time`, `last_slept`, `last_woken`, `last_worked_at_poi`
+
+Available retrievable memories as of 1.16.2:
+* `home`, `job_site`, `potential_job_site`, `meeting_point`, `secondary_job_site`, `mobs`, `visible_mobs`,
+`visible_villager_babies`, `nearest_players`, `nearest_visible_players`, `nearest_visible_targetable_player`,
+`walk_target`, `look_target`, `attack_target`, `attack_cooling_down`, `interaction_target`, `breed_target`,
+`ride_target`, `path`, `interactable_doors`, `opened_doors`, `nearest_bed`, `hurt_by`, `hurt_by_entity`, `avoid_target`,
+`nearest_hostile`, `hiding_place`, `heard_bell_time`, `cant_reach_walk_target_since`, `golem_detected_recently`, 
+`last_slept`, `last_woken`, `last_worked_at_poi`, `nearest_visible_adult`, `nearest_visible_wanted_item`, 
+`nearest_visible_nemesis`, `angry_at`, `universal_anger`, `admiring_item`, `time_trying_to_reach_admire_item`,
+`disable_walk_to_admire_item`, `admiring_disabled`, `hunted_recently`, `celebrate_location`, `dancing`, 
+`nearest_visible_huntable_hoglin`, `nearest_visible_baby_hoglin`, `nearest_targetable_player_not_wearing_gold`,
+`nearby_adult_piglins`, `nearest_visible_adult_piglins`, `nearest_visible_adult_hoglins`,
+`nearest_visible_adult_piglin`, `nearest_visible_zombiefied`, `visible_adult_piglin_count`,
+`visible_adult_hoglin_count`, `nearest_player_holding_wanted_item`, `ate_recently`, `nearest_repellent`, `pacified`
+
 
 ### `query(e, 'nbt', path?)`
 
@@ -541,6 +657,12 @@ Modifies directly player raw hunger components. Has no effect on non-players
 
 adds exhaustion value to the current player exhaustion level - that's the method you probably want to use
 to manipulate how much 'food' some action cost.
+
+### `modify(e, 'breaking_progress', value)` 
+
+Modifies a breaking progress of a player currently mined block. Value of `null`, `-1` make it reset. 
+Values `0` to `10` will show respective animation of a breaking block. Check `query(e, 'breaking_progress')` for 
+examples.
 
 ### `modify(e, 'nbt_merge', partial_tag)`
 

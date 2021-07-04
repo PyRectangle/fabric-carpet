@@ -7,6 +7,7 @@ import carpet.script.Expression;
 import carpet.script.exception.InternalExpressionException;
 import carpet.script.value.BlockValue;
 import carpet.script.value.EntityValue;
+import carpet.script.value.FormattedTextValue;
 import carpet.script.value.ListValue;
 import carpet.script.value.MapValue;
 import carpet.script.value.NumericValue;
@@ -19,6 +20,7 @@ import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.command.arguments.ParticleArgumentType;
 import net.minecraft.entity.Entity;
+import net.minecraft.nbt.ByteTag;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.DoubleTag;
 import net.minecraft.nbt.FloatTag;
@@ -233,6 +235,7 @@ public class ShapeDispatcher
             put("box", creator(Box::new));
             put("sphere", creator(Sphere::new));
             put("cylinder", creator(Cylinder::new));
+            put("label", creator(Text::new));
         }};
         private static Function<Map<String, Value>,ExpiringShape> creator(Supplier<ExpiringShape> shapeFactory)
         {
@@ -253,6 +256,7 @@ public class ShapeDispatcher
         protected int followEntity;
         protected String snapTo;
         protected boolean snapX, snapY, snapZ;
+        protected boolean discreteX, discreteY, discreteZ;
         public DimensionType shapeDimension;
 
 
@@ -315,15 +319,18 @@ public class ShapeDispatcher
                 snapX = snapTo.contains("x");
                 snapY = snapTo.contains("y");
                 snapZ = snapTo.contains("z");
+                discreteX = snapTo.contains("dx");
+                discreteY = snapTo.contains("dy");
+                discreteZ = snapTo.contains("dz");
             }
         }
         public int getExpiry() { return duration; }
         public Vec3d toAbsolute(Entity e, Vec3d vec, float partialTick)
         {
             return vec.add(
-                    snapX?MathHelper.lerp(partialTick, e.prevX, e.getX()):0.0,
-                    snapY?MathHelper.lerp(partialTick, e.prevY, e.getY()):0.0,
-                    snapZ?MathHelper.lerp(partialTick, e.prevZ, e.getZ()):0.0
+                    snapX?(discreteX ?MathHelper.floor(e.getX()):MathHelper.lerp(partialTick, e.prevX, e.getX())):0.0,
+                    snapY?(discreteY ?MathHelper.floor(e.getY()):MathHelper.lerp(partialTick, e.prevY, e.getY())):0.0,
+                    snapZ?(discreteZ ?MathHelper.floor(e.getZ()):MathHelper.lerp(partialTick, e.prevZ, e.getZ())):0.0
             );
         }
         public Vec3d relativiseRender(World world, Vec3d vec, float partialTick)
@@ -366,10 +373,22 @@ public class ShapeDispatcher
             hash ^= shapeDimension.hashCode(); hash *= 1099511628211L;
             hash ^= color;                     hash *= 1099511628211L;
             hash ^= followEntity;              hash *= 1099511628211L;
+            if (followEntity >= 0)
+            {
+                hash ^= snapTo.hashCode();     hash *= 1099511628211L;
+            }
             hash ^= Float.hashCode(lineWidth); hash *= 1099511628211L;
             if (fa != 0.0) { hash = 31*hash + fillColor; hash *= 1099511628211L; }
             return hash;
         }
+        private static final double xdif = new Random().nextDouble();
+        private static final double ydif = new Random().nextDouble();
+        private static final double zdif = new Random().nextDouble();
+        int vec3dhash(Vec3d vec)
+        {
+            return vec.add(xdif, ydif, zdif).hashCode();
+        }
+
         // list of params that need to be there
         private final Set<String> required = ImmutableSet.of("duration", "shape", "dim");
         private final Map<String, Value> optional = ImmutableMap.of(
@@ -388,6 +407,125 @@ public class ShapeDispatcher
             return requiredParams().contains(param) || optionalParams().contains(param);
         }
     }
+
+    public static class Text extends ExpiringShape
+    {
+        private final Set<String> required = ImmutableSet.of("pos", "text");
+        private final Map<String, Value> optional = ImmutableMap.<String, Value>builder().
+                put("facing", new StringValue("player")).
+                put("raise", new NumericValue(0)).
+                put("tilt", new NumericValue(0)).
+                put("indent", new NumericValue(0)).
+                put("height", new NumericValue(0)).
+                put("align", new StringValue("center")).
+                put("size", new NumericValue(10)).
+                put("value", Value.NULL).
+                put("doublesided", new NumericValue(0)).
+                build();
+        @Override
+        protected Set<String> requiredParams() { return Sets.union(super.requiredParams(), required); }
+        @Override
+        protected Set<String> optionalParams() { return Sets.union(super.optionalParams(), optional.keySet()); }
+        public Text() { }
+
+        Vec3d pos;
+        String text;
+        int textcolor;
+        int textbck;
+
+        Direction facing;
+        float raise;
+        float tilt;
+        float size;
+        float indent;
+        int align;
+        float height;
+        String value;
+        boolean doublesided;
+
+        @Override
+        protected void init(Map<String, Value> options)
+        {
+            super.init(options);
+            pos = vecFromValue(options.get("pos"));
+            text = options.get("text").getString();
+            value = text;
+            if (options.containsKey("value"))
+            {
+                value = options.get("value").getString();
+            }
+            textcolor = rgba2argb(color);
+            textbck = rgba2argb(fillColor);
+            String dir = options.getOrDefault("facing", optional.get("facing")).getString();
+            facing = null;
+            switch (dir)
+            {
+                case "north": facing = Direction.NORTH; break;
+                case "south": facing = Direction.SOUTH; break;
+                case "east": facing = Direction.EAST; break;
+                case "west": facing = Direction.WEST; break;
+                case "up":  facing = Direction.UP; break;
+                case "down":  facing = Direction.DOWN; break;
+            }
+            align = 0;
+            if (options.containsKey("align"))
+            {
+                String alignStr = options.get("align").getString();
+                if ("right".equalsIgnoreCase(alignStr))
+                    align = 1;
+                else if ("left".equalsIgnoreCase(alignStr))
+                    align = -1;
+            }
+            doublesided = false;
+            if (options.containsKey("doublesided"))
+            {
+                doublesided = options.get("doublesided").getBoolean();
+            }
+
+            raise = NumericValue.asNumber(options.getOrDefault("raise", optional.get("raise"))).getFloat();
+            tilt = NumericValue.asNumber(options.getOrDefault("tilt", optional.get("tilt"))).getFloat();
+            indent = NumericValue.asNumber(options.getOrDefault("indent", optional.get("indent"))).getFloat();
+            height = NumericValue.asNumber(options.getOrDefault("height", optional.get("height"))).getFloat();
+
+            size = NumericValue.asNumber(options.getOrDefault("size", optional.get("size"))).getFloat();
+        }
+
+        private int rgba2argb(int color)
+        {
+            int r = Math.max(1, color >> 24 & 0xFF);
+            int g = Math.max(1, color >> 16 & 0xFF);
+            int b = Math.max(1, color >>  8 & 0xFF);
+            int a = color & 0xFF;
+            return (a << 24) + (r << 16) + (g << 8) + b;
+        }
+
+
+        @Override
+        public Consumer<ServerPlayerEntity> alternative()
+        {
+            return s -> {};
+        }
+
+        @Override
+        public long calcKey()
+        {
+            long hash = super.calcKey();
+            hash ^= 5;                  hash *= 1099511628211L;
+            hash ^= vec3dhash(pos);     hash *= 1099511628211L;
+            hash ^= text.hashCode();    hash *= 1099511628211L;
+            if (facing!= null) hash ^= facing.hashCode(); hash *= 1099511628211L;
+            hash ^= Float.hashCode(raise); hash *= 1099511628211L;
+            hash ^= Float.hashCode(tilt); hash *= 1099511628211L;
+            hash ^= Float.hashCode(indent); hash *= 1099511628211L;
+            hash ^= Float.hashCode(height); hash *= 1099511628211L;
+            hash ^= Float.hashCode(size); hash *= 1099511628211L;
+            hash ^= Integer.hashCode(align); hash *= 1099511628211L;
+            hash ^= Boolean.hashCode(doublesided); hash *= 1099511628211L;
+
+            return hash;
+        }
+    }
+
 
     public static class Box extends ExpiringShape
     {
@@ -408,14 +546,13 @@ public class ShapeDispatcher
             super.init(options);
             from = vecFromValue(options.get("from"));
             to = vecFromValue(options.get("to"));
-            if (from.equals(to)) throw new InternalExpressionException("Box dimensions are invalid - cannot draw a zero-size boxes");
         }
 
         @Override
         public Consumer<ServerPlayerEntity> alternative()
         {
             ParticleEffect particle = replacementParticle();
-            double density = Math.max(2.0, from.distanceTo(to) /50) / (a+0.1);
+            double density = Math.max(2.0, from.distanceTo(to) /50/ (a+0.1)) ;
             return p ->
             {
                 if (p.dimension == shapeDimension)
@@ -436,8 +573,8 @@ public class ShapeDispatcher
         {
             long hash = super.calcKey();
             hash ^= 1;                     hash *= 1099511628211L;
-            hash ^= from.hashCode();       hash *= 1099511628211L;
-            hash ^= to.hashCode();         hash *= 1099511628211L;
+            hash ^= vec3dhash(from);       hash *= 1099511628211L;
+            hash ^= vec3dhash(to);         hash *= 1099511628211L;
             return hash;
         }
 
@@ -491,7 +628,6 @@ public class ShapeDispatcher
             super.init(options);
             from = vecFromValue(options.get("from"));
             to = vecFromValue(options.get("to"));
-            if (from.equals(to)) throw new InternalExpressionException("Line dimensions are invalid - cannot draw a zero-length lines");
         }
 
         @Override
@@ -516,8 +652,8 @@ public class ShapeDispatcher
         {
             long hash = super.calcKey();
             hash ^= 2;                     hash *= 1099511628211L;
-            hash ^= from.hashCode();       hash *= 1099511628211L;
-            hash ^= to.hashCode();         hash *= 1099511628211L;
+            hash ^= vec3dhash(from);       hash *= 1099511628211L;
+            hash ^= vec3dhash(to);         hash *= 1099511628211L;
             return hash;
         }
     }
@@ -588,7 +724,7 @@ public class ShapeDispatcher
         {
             long hash = super.calcKey();
             hash ^= 3;                        hash *= 1099511628211L;
-            hash ^= center.hashCode();        hash *= 1099511628211L;
+            hash ^= vec3dhash(center);        hash *= 1099511628211L;
             hash ^= Double.hashCode(radius);  hash *= 1099511628211L;
             hash ^= level;                    hash *= 1099511628211L;
             return hash;
@@ -689,8 +825,8 @@ public class ShapeDispatcher
         public long calcKey()
         {
             long hash = super.calcKey();
-            hash ^= 3;                        hash *= 1099511628211L;
-            hash ^= center.hashCode();        hash *= 1099511628211L;
+            hash ^= 4;                        hash *= 1099511628211L;
+            hash ^= vec3dhash(center);        hash *= 1099511628211L;
             hash ^= Double.hashCode(radius);  hash *= 1099511628211L;
             hash ^= Double.hashCode(height);  hash *= 1099511628211L;
             hash ^= level;                    hash *= 1099511628211L;
@@ -707,18 +843,35 @@ public class ShapeDispatcher
             put("duration", new NonNegativeIntParam("duration"));
             put("color", new ColorParam("color"));
             put("follow", new EntityParam("follow"));
-            put("snap", new StringChoiceParam("snap", "xyz", "xz", "yz", "xy", "x", "y", "z"));
+            put("snap", new StringChoiceParam("snap",
+                    "xyz", "xz", "yz", "xy", "x", "y", "z",
+                    "dxdydz", "dxdz", "dydz", "dxdy", "dx", "dy", "dz",
+                    "xdz", "dxz", "ydz", "dyz", "xdy", "dxy",
+                    "xydz", "xdyz", "xdydz", "dxyz", "dxydz", "dxdyz"
+                    ));
             put("line", new PositiveFloatParam("line"));
             put("fill", new ColorParam("fill"));
 
             put("from", new Vec3Param("from", false));
             put("to", new Vec3Param("to", true));
             put("center", new Vec3Param("center", false));
+            put("pos", new Vec3Param("pos", false));
             put("radius", new PositiveFloatParam("radius"));
             put("level", new PositiveIntParam("level"));
             put("height", new FloatParam("height"));
             put("axis", new StringChoiceParam("axis", "x", "y", "z"));
             put("points", new PointsParam("points"));
+            put("text", new FormattedTextParam("text"));
+            put("value", new FormattedTextParam("value"));
+            put("size", new PositiveIntParam("size"));
+            put("align", new StringChoiceParam("align", "center", "left", "right"));
+
+            put("indent", new FloatParam("indent"));
+            put("raise", new FloatParam("raise"));
+            put("tilt", new FloatParam("tilt"));
+            put("facing", new StringChoiceParam("axis", "player", "north", "south", "east", "west", "up", "down"));
+            put("doublesided", new BoolParam("doublesided"));
+
         }};
         protected String id;
         protected Param(String id)
@@ -739,6 +892,34 @@ public class ShapeDispatcher
         public Tag toTag(Value value) { return StringTag.of(value.getString()); }
         public Value decode(Tag tag) { return new StringValue(tag.asString()); }
     }
+    public static class TextParam extends StringParam
+    {
+        protected TextParam(String id)
+        {
+            super(id);
+        }
+        @Override
+        public Value validate(Map<String, Value> options, CarpetContext cc, Value value)
+        {
+            return value;
+        }
+    }
+    public static class FormattedTextParam extends StringParam
+    {
+
+        protected FormattedTextParam(String id)
+        {
+            super(id);
+        }
+        @Override
+        public Value validate(Map<String, Value> options, CarpetContext cc, Value value)
+        {
+            if (value instanceof FormattedTextValue)
+                return new StringValue(((FormattedTextValue) value).getText().asFormattedString());
+            return value;
+        }
+    }
+
 
     public static class StringChoiceParam extends StringParam
     {
@@ -794,6 +975,25 @@ public class ShapeDispatcher
             if (!(value instanceof NumericValue))
                 throw new InternalExpressionException("'" + id + "' needs to be a number");
             return value;
+        }
+    }
+    public static class BoolParam extends NumericParam
+    {
+        protected BoolParam(String id)
+        {
+            super(id);
+        }
+
+        @Override
+        public Tag toTag(Value value)
+        {
+            return ByteTag.of(value.getBoolean());
+        }
+
+        @Override
+        public Value decode(Tag tag)
+        {
+            return new NumericValue(((ByteTag) tag).getByte() > 0);
         }
     }
     public static class FloatParam extends NumericParam
@@ -1074,13 +1274,33 @@ public class ShapeDispatcher
 
     public static int drawParticleLine(List<ServerPlayerEntity> players, ParticleEffect particle, Vec3d from, Vec3d to, double density)
     {
-        if (isStraight(from, to, density)) return drawOptimizedParticleLine(players, particle, from, to, density);
-        double lineLengthSq = from.squaredDistanceTo(to);
-        if (lineLengthSq == 0) return 0;
-        Vec3d incvec = to.subtract(from).multiply(2*density/MathHelper.sqrt(lineLengthSq));
+        double distance = from.squaredDistanceTo(to);
+        if (distance == 0) return 0;
         int pcount = 0;
+        if (distance < 100)
+        {
+            Random rand = players.get(0).getServerWorld().random;
+            int particles = (int)(distance/density)+1;
+            Vec3d towards = to.subtract(from);
+            for (int i = 0; i < particles; i++)
+            {
+                Vec3d at = from.add(towards.multiply( rand.nextDouble()));
+                for (ServerPlayerEntity player : players)
+                {
+                    player.getServerWorld().spawnParticles(player, particle, true,
+                            at.x, at.y, at.z, 1,
+                            0.0, 0.0, 0.0, 0.0);
+                    pcount ++;
+                }
+            }
+            return pcount;
+        }
+
+        if (isStraight(from, to, density)) return drawOptimizedParticleLine(players, particle, from, to, density);
+        Vec3d incvec = to.subtract(from).multiply(2*density/MathHelper.sqrt(distance));
+
         for (Vec3d delta = new Vec3d(0.0,0.0,0.0);
-             delta.lengthSquared()<lineLengthSq;
+             delta.lengthSquared()<distance;
              delta = delta.add(incvec.multiply(Expression.randomizer.nextFloat())))
         {
             for (ServerPlayerEntity player : players)
