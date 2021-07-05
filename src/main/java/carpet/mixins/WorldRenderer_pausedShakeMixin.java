@@ -17,7 +17,7 @@ public class WorldRenderer_pausedShakeMixin
 
     float initial = 0.0f;
 
-    @ModifyVariable(method = "render", argsOnly = true, ordinal = 0 ,at = @At(
+    @ModifyVariable(method = "render", argsOnly = true, require = 0, ordinal = 0 ,at = @At(
             value = "INVOKE",
             target = "Lnet/minecraft/client/world/ClientWorld;getEntities()Ljava/lang/Iterable;"
     ))
