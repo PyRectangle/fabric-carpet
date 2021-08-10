@@ -135,6 +135,9 @@ public class CarpetSettings
     @Rule(desc = "Reintroduce Dragon Egg Bedrock breaking bug from 1.12", category = {EXPERIMENTAL})
     public static boolean dragonEggBedrockBreaking = false;
 
+    @Rule(desc = "Dragon Eggs fall instantly even in entity processing chunks", category = {CREATIVE, EXPERIMENTAL}, extra = "Requires dragonEggBedrockBreaking to be on")
+    public static boolean dragonEggInstantFall = false;
+
     @Rule(
             desc = "Empty shulker boxes can stack to 64 when dropped on the ground",
             extra = "To move them around between inventories, use shift click to move entire stacks",
@@ -409,6 +412,9 @@ public class CarpetSettings
 
     @Rule(desc = "Enables /player command to control/spawn players", category = COMMAND)
     public static String commandPlayer = "true";
+
+    @Rule(desc = "Enables /player command to control/spawn players", category = SURVIVAL)
+    public static boolean allowSurvivalBotsOnly = false;
 
     @Rule(desc = "Allows to track mobs AI via /track command", category = COMMAND)
     public static String commandTrackAI = "true";
