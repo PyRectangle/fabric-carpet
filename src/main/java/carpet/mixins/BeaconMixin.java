@@ -12,9 +12,15 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import sun.awt.image.ImageWatched;
+
+import java.util.HashMap;
+import java.util.LinkedList;
 
 @Mixin(Block.class)
 public class BeaconMixin {
+    private HashMap<ChunkPos, LinkedList<BlockPos>> chunks = new HashMap<>();
+
     @Inject(at = @At("TAIL"), method = "onBreak")
     private void afterBreak(World world_1, BlockPos blockPos_1, BlockState blockState_1, PlayerEntity playerEntity_1, CallbackInfo ci) {
         if (!CarpetSettings.beaconChunkLoading || !(blockState_1.getBlock() instanceof BeaconBlock)) {
@@ -40,8 +46,41 @@ public class BeaconMixin {
             return;
         }
 
+        boolean canChange = false;
         ChunkPos ch = world_1.getChunk(blockPos_1).getPos();
-
-        world_1.getServer().getWorld(world_1.getDimension().getType()).setChunkForced(ch.x, ch.z, set);
+        LinkedList<BlockPos> beacons = chunks.get(ch);
+        if(set) {
+            if(beacons == null) {
+		canChange = true;
+                beacons = new LinkedList<>();
+                beacons.add(blockPos_1);
+                chunks.put(ch, beacons);
+            } else {
+		canChange = false;
+                beacons.add(blockPos_1);
+            }
+        } else {
+            if(beacons == null) {
+                canChange = true;
+            } else {
+                int index = -1;
+                for (int i = 0; i < beacons.size(); i++) {
+                    if(beacons.get(i).equals(blockPos_1)) {
+                        index = i;
+                        break;
+                    }
+                }
+                if(index != -1) {
+                    beacons.remove(index);
+                }
+                if(beacons.size() == 0) {
+                    chunks.remove(ch);
+                    canChange = true;
+                }
+            }
+        }
+        if(canChange) {
+            world_1.getServer().getWorld(world_1.getDimension().getType()).setChunkForced(ch.x, ch.z, set);
+        }
     }
 }
