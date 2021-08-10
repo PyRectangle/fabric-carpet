@@ -248,13 +248,14 @@ public class PlayerCommand
                 () -> DimensionArgumentType.getDimensionArgument(context, "dimension"),
                 () -> source.getWorld().dimension.getType()
         );
-        GameMode mode = GameMode.CREATIVE;
-        try
-        {
-            ServerPlayerEntity player = context.getSource().getPlayer();
-            mode = player.interactionManager.getGameMode();
+        GameMode mode = GameMode.SURVIVAL;
+        if(!CarpetSettings.allowSurvivalBotsOnly) {
+            mode = GameMode.CREATIVE;
+            try {
+                ServerPlayerEntity player = context.getSource().getPlayer();
+                mode = player.interactionManager.getGameMode();
+            } catch (CommandSyntaxException ignored) {}
         }
-        catch (CommandSyntaxException ignored) {}
         String playerName = StringArgumentType.getString(context, "player");
         if (playerName.length()>40)
         {
