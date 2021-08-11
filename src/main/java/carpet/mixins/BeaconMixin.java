@@ -29,14 +29,11 @@ public class BeaconMixin {
 
     @Inject(at = @At("TAIL"), method = "onBlockAdded")
     public void afterPlaced(BlockState state, World world, BlockPos pos, BlockState oldState, boolean moved, CallbackInfo ci) {
-        System.out.println("placed");
         if (!CarpetSettings.beaconChunkLoading || !(state.getBlock() instanceof BeaconBlock)) {
             return;
         }
 
         boolean isPowered = world.isReceivingRedstonePower(pos);
-
-        System.out.println(isPowered);
 
         this.setLoad(world, pos, isPowered);
     }
