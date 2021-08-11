@@ -13,11 +13,10 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.HashMap;
-import java.util.LinkedList;
 
 @Mixin(Block.class)
 public class BeaconMixin {
-    private HashMap<ChunkPos, LinkedList<BlockPos>> chunks = new HashMap<>();
+    private HashMap<ChunkPos, HashMap<BlockPos, Boolean>> chunks = new HashMap<>();
 
     @Inject(at = @At("TAIL"), method = "onBreak")
     private void afterBreak(World world_1, BlockPos blockPos_1, BlockState blockState_1, PlayerEntity playerEntity_1, CallbackInfo ci) {
@@ -26,6 +25,20 @@ public class BeaconMixin {
         }
 
         this.setLoad(world_1, blockPos_1, false);
+    }
+
+    @Inject(at = @At("TAIL"), method = "onBlockAdded")
+    public void afterPlaced(BlockState state, World world, BlockPos pos, BlockState oldState, boolean moved, CallbackInfo ci) {
+        System.out.println("placed");
+        if (!CarpetSettings.beaconChunkLoading || !(state.getBlock() instanceof BeaconBlock)) {
+            return;
+        }
+
+        boolean isPowered = world.isReceivingRedstonePower(pos);
+
+        System.out.println(isPowered);
+
+        this.setLoad(world, pos, isPowered);
     }
 
     @Inject(method = "neighborUpdate", at = @At("TAIL"))
@@ -46,31 +59,19 @@ public class BeaconMixin {
 
         boolean canChange = false;
         ChunkPos ch = world_1.getChunk(blockPos_1).getPos();
-        LinkedList<BlockPos> beacons = chunks.get(ch);
+        HashMap<BlockPos, Boolean> beacons = chunks.get(ch);
         if(set) {
             if(beacons == null) {
-		canChange = true;
-                beacons = new LinkedList<>();
-                beacons.add(blockPos_1);
-                chunks.put(ch, beacons);
-            } else {
-		canChange = false;
-                beacons.add(blockPos_1);
+                canChange = true;
+                beacons = new HashMap<>();
             }
+            beacons.put(blockPos_1, true);
+            chunks.put(ch, beacons);
         } else {
             if(beacons == null) {
                 canChange = true;
             } else {
-                int index = -1;
-                for (int i = 0; i < beacons.size(); i++) {
-                    if(beacons.get(i).equals(blockPos_1)) {
-                        index = i;
-                        break;
-                    }
-                }
-                if(index != -1) {
-                    beacons.remove(index);
-                }
+                beacons.remove(blockPos_1);
                 if(beacons.size() == 0) {
                     chunks.remove(ch);
                     canChange = true;
